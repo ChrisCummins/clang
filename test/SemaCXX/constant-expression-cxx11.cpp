@@ -95,11 +95,13 @@ namespace TemplateArgumentConversion {
 }
 
 namespace CaseStatements {
+  int x;
   void f(int n) {
     switch (n) {
     case MemberZero().zero: // expected-error {{did you mean to call it with no arguments?}} expected-note {{previous}}
     case id(0): // expected-error {{duplicate case value '0'}}
       return;
+    case __builtin_constant_p(true) ? (__SIZE_TYPE__)&x : 0:; // expected-error {{constant}}
     }
   }
 }
@@ -325,7 +327,7 @@ struct Str {
 };
 
 extern char externalvar[];
-constexpr bool constaddress = (void *)externalvar == (void *)0x4000UL; // expected-error {{must be initialized by a constant expression}}
+constexpr bool constaddress = (void *)externalvar == (void *)0x4000UL; // expected-error {{must be initialized by a constant expression}} expected-note {{reinterpret_cast}}
 constexpr bool litaddress = "foo" == "foo"; // expected-error {{must be initialized by a constant expression}} expected-warning {{unspecified}}
 static_assert(0 != "foo", "");
 
@@ -1177,7 +1179,7 @@ namespace ExternConstexpr {
   void f() {
     extern constexpr int i; // expected-error {{constexpr variable declaration must be a definition}}
     constexpr int j = 0;
-    constexpr int k; // expected-error {{default initialization of an object of const type}} expected-note{{add an explicit initializer to initialize 'k'}}
+    constexpr int k; // expected-error {{default initialization of an object of const type}}
   }
 }
 
@@ -1611,7 +1613,8 @@ namespace TypeId {
   A &g();
   constexpr auto &x = typeid(f());
   constexpr auto &y = typeid(g()); // expected-error{{constant expression}} \
-  // expected-note{{typeid applied to expression of polymorphic type 'TypeId::A' is not allowed in a constant expression}}
+  // expected-note{{typeid applied to expression of polymorphic type 'TypeId::A' is not allowed in a constant expression}} \
+  // expected-warning {{expression with side effects will be evaluated despite being used as an operand to 'typeid'}}
 }
 
 namespace PR14203 {
@@ -1710,6 +1713,9 @@ namespace InitializerList {
     return sum(ints.begin(), ints.end());
   }
   static_assert(sum({1, 2, 3, 4, 5}) == 15, "");
+
+  static_assert(*std::initializer_list<int>{1, 2, 3}.begin() == 1, "");
+  static_assert(std::initializer_list<int>{1, 2, 3}.begin()[2] == 3, "");
 }
 
 namespace StmtExpr {
@@ -1796,8 +1802,8 @@ namespace Bitfields {
     unsigned u : 5;
     int n : 5;
     bool b2 : 3;
-    unsigned u2 : 74; // expected-warning {{exceeds the size of its type}}
-    int n2 : 81; // expected-warning {{exceeds the size of its type}}
+    unsigned u2 : 74; // expected-warning {{exceeds the width of its type}}
+    int n2 : 81; // expected-warning {{exceeds the width of its type}}
   };
 
   constexpr A a = { false, 33, 31, false, 0xffffffff, 0x7fffffff }; // expected-warning 2{{truncation}}
@@ -1842,8 +1848,9 @@ namespace ZeroSizeTypes {
 namespace BadDefaultInit {
   template<int N> struct X { static const int n = N; };
 
-  struct A { // expected-note {{subexpression}}
-    int k = X<A().k>::n; // expected-error {{defaulted default constructor of 'A' cannot be used}} expected-error {{not a constant expression}} expected-note {{in call to 'A()'}}
+  struct A {
+    int k = // expected-error {{cannot use defaulted default constructor of 'A' within the class outside of member functions because 'k' has an initializer}}
+        X<A().k>::n; // expected-error {{not a constant expression}} expected-note {{implicit default constructor for 'BadDefaultInit::A' first required here}}
   };
 
   // FIXME: The "constexpr constructor must initialize all members" diagnostic
@@ -1867,10 +1874,9 @@ namespace NeverConstantTwoWays {
         0;
   }
 
-  // FIXME: We should diagnose the cast to long here, not the division by zero.
   constexpr int n = // expected-error {{must be initialized by a constant expression}}
-      (int *)(long)&n == &n ?
-        1 / 0 : // expected-warning {{division by zero}} expected-note {{division by zero}}
+      (int *)(long)&n == &n ? // expected-note {{reinterpret_cast}}
+        1 / 0 : // expected-warning {{division by zero}}
         0;
 }
 
@@ -1938,4 +1944,64 @@ namespace PR19010 {
 
 void PR21327(int a, int b) {
   static_assert(&a + 1 != &b, ""); // expected-error {{constant expression}}
+}
+
+namespace EmptyClass {
+  struct E1 {} e1;
+  union E2 {} e2; // expected-note {{here}}
+  struct E3 : E1 {} e3;
+
+  // The defaulted copy constructor for an empty class does not read any
+  // members. The defaulted copy constructor for an empty union reads the
+  // object representation.
+  constexpr E1 e1b(e1);
+  constexpr E2 e2b(e2); // expected-error {{constant expression}} expected-note{{read of non-const}} expected-note {{in call}}
+  constexpr E3 e3b(e3);
+}
+
+namespace PR21786 {
+  extern void (*start[])();
+  extern void (*end[])();
+  static_assert(&start != &end, ""); // expected-error {{constant expression}}
+  static_assert(&start != nullptr, "");
+
+  struct Foo;
+  struct Bar {
+    static const Foo x;
+    static const Foo y;
+  };
+  static_assert(&Bar::x != nullptr, "");
+  static_assert(&Bar::x != &Bar::y, "");
+}
+
+namespace PR21859 {
+  constexpr int Fun() { return; } // expected-error {{non-void constexpr function 'Fun' should return a value}}
+  constexpr int Var = Fun(); // expected-error {{constexpr variable 'Var' must be initialized by a constant expression}}
+}
+
+struct InvalidRedef {
+  int f; // expected-note{{previous definition is here}}
+  constexpr int f(void); // expected-error{{redefinition of 'f'}} expected-warning{{will not be implicitly 'const'}}
+};
+
+namespace PR17938 {
+  template <typename T> constexpr T const &f(T const &x) { return x; }
+
+  struct X {};
+  struct Y : X {};
+  struct Z : Y { constexpr Z() {} };
+
+  static constexpr auto z = f(Z());
+}
+
+namespace PR24597 {
+  struct A {
+    int x, *p;
+    constexpr A() : x(0), p(&x) {}
+    constexpr A(const A &a) : x(a.x), p(&x) {}
+  };
+  constexpr A f() { return A(); }
+  constexpr A g() { return f(); }
+  constexpr int a = *f().p;
+  constexpr int b = *g().p;
 }

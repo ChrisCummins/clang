@@ -143,14 +143,8 @@ Lexer::Lexer(SourceLocation fileloc, const LangOptions &langOpts,
 /// range will outlive it, so it doesn't take ownership of it.
 Lexer::Lexer(FileID FID, const llvm::MemoryBuffer *FromFile,
              const SourceManager &SM, const LangOptions &langOpts)
-  : FileLoc(SM.getLocForStartOfFile(FID)), LangOpts(langOpts) {
-
-  InitLexer(FromFile->getBufferStart(), FromFile->getBufferStart(),
-            FromFile->getBufferEnd());
-
-  // We *are* in raw mode.
-  LexingRawMode = true;
-}
+    : Lexer(SM.getLocForStartOfFile(FID), langOpts, FromFile->getBufferStart(),
+            FromFile->getBufferStart(), FromFile->getBufferEnd()) {}
 
 /// Create_PragmaLexer: Lexer constructor - Create a new lexer object for
 /// _Pragma expansion.  This has a variety of magic semantics that this method
@@ -205,7 +199,7 @@ Lexer *Lexer::Create_PragmaLexer(SourceLocation SpellingLoc,
 
 /// Stringify - Convert the specified string into a C string, with surrounding
 /// ""'s, and with escaped \ and " characters.
-std::string Lexer::Stringify(const std::string &Str, bool Charify) {
+std::string Lexer::Stringify(StringRef Str, bool Charify) {
   std::string Result = Str;
   char Quote = Charify ? '\'' : '"';
   for (unsigned i = 0, e = Result.size(); i != e; ++i) {
@@ -241,7 +235,7 @@ static size_t getSpellingSlow(const Token &Tok, const char *BufPtr,
   size_t Length = 0;
   const char *BufEnd = BufPtr + Tok.getLength();
 
-  if (Tok.is(tok::string_literal)) {
+  if (tok::isStringLiteral(Tok.getKind())) {
     // Munch the encoding-prefix and opening double-quote.
     while (BufPtr < BufEnd) {
       unsigned Size;
@@ -1360,7 +1354,9 @@ void Lexer::SkipBytes(unsigned Bytes, bool StartOfLine) {
 }
 
 static bool isAllowedIDChar(uint32_t C, const LangOptions &LangOpts) {
-  if (LangOpts.CPlusPlus11 || LangOpts.C11) {
+  if (LangOpts.AsmPreprocessor) {
+    return false;
+  } else if (LangOpts.CPlusPlus11 || LangOpts.C11) {
     static const llvm::sys::UnicodeCharSet C11AllowedIDChars(
         C11AllowedIDCharRanges);
     return C11AllowedIDChars.contains(C);
@@ -1377,7 +1373,9 @@ static bool isAllowedIDChar(uint32_t C, const LangOptions &LangOpts) {
 
 static bool isAllowedInitiallyIDChar(uint32_t C, const LangOptions &LangOpts) {
   assert(isAllowedIDChar(C, LangOpts));
-  if (LangOpts.CPlusPlus11 || LangOpts.C11) {
+  if (LangOpts.AsmPreprocessor) {
+    return false;
+  } else if (LangOpts.CPlusPlus11 || LangOpts.C11) {
     static const llvm::sys::UnicodeCharSet C11DisallowedInitialIDChars(
         C11DisallowedInitialIDCharRanges);
     return !C11DisallowedInitialIDChars.contains(C);
@@ -1738,7 +1736,7 @@ bool Lexer::LexStringLiteral(Token &Result, const char *CurPtr,
     if (C == '\n' || C == '\r' ||             // Newline.
         (C == 0 && CurPtr-1 == BufferEnd)) {  // End of file.
       if (!isLexingRawMode() && !LangOpts.AsmPreprocessor)
-        Diag(BufferPtr, diag::ext_unterminated_string);
+        Diag(BufferPtr, diag::ext_unterminated_char_or_string) << 1;
       FormTokenWithChars(Result, CurPtr-1, tok::unknown);
       return true;
     }
@@ -1762,7 +1760,7 @@ bool Lexer::LexStringLiteral(Token &Result, const char *CurPtr,
 
   // If a nul character existed in the string, warn about it.
   if (NulCharacter && !isLexingRawMode())
-    Diag(NulCharacter, diag::null_in_string);
+    Diag(NulCharacter, diag::null_in_char_or_string) << 1;
 
   // Update the location of the token as well as the BufferPtr instance var.
   const char *TokStart = BufferPtr;
@@ -1860,7 +1858,7 @@ bool Lexer::LexAngledStringLiteral(Token &Result, const char *CurPtr) {
   char C = getAndAdvanceChar(CurPtr, Result);
   while (C != '>') {
     // Skip escaped characters.
-    if (C == '\\') {
+    if (C == '\\' && CurPtr < BufferEnd) {
       // Skip the escaped character.
       getAndAdvanceChar(CurPtr, Result);
     } else if (C == '\n' || C == '\r' ||             // Newline.
@@ -1878,7 +1876,7 @@ bool Lexer::LexAngledStringLiteral(Token &Result, const char *CurPtr) {
 
   // If a nul character existed in the string, warn about it.
   if (NulCharacter && !isLexingRawMode())
-    Diag(NulCharacter, diag::null_in_string);
+    Diag(NulCharacter, diag::null_in_char_or_string) << 1;
 
   // Update the location of token as well as BufferPtr.
   const char *TokStart = BufferPtr;
@@ -1889,17 +1887,20 @@ bool Lexer::LexAngledStringLiteral(Token &Result, const char *CurPtr) {
 
 
 /// LexCharConstant - Lex the remainder of a character constant, after having
-/// lexed either ' or L' or u' or U'.
+/// lexed either ' or L' or u8' or u' or U'.
 bool Lexer::LexCharConstant(Token &Result, const char *CurPtr,
                             tok::TokenKind Kind) {
   // Does this character contain the \0 character?
   const char *NulCharacter = nullptr;
 
-  if (!isLexingRawMode() &&
-      (Kind == tok::utf16_char_constant || Kind == tok::utf32_char_constant))
-    Diag(BufferPtr, getLangOpts().CPlusPlus
-           ? diag::warn_cxx98_compat_unicode_literal
-           : diag::warn_c99_compat_unicode_literal);
+  if (!isLexingRawMode()) {
+    if (Kind == tok::utf16_char_constant || Kind == tok::utf32_char_constant)
+      Diag(BufferPtr, getLangOpts().CPlusPlus
+                          ? diag::warn_cxx98_compat_unicode_literal
+                          : diag::warn_c99_compat_unicode_literal);
+    else if (Kind == tok::utf8_char_constant)
+      Diag(BufferPtr, diag::warn_cxx14_compat_u8_character_literal);
+  }
 
   char C = getAndAdvanceChar(CurPtr, Result);
   if (C == '\'') {
@@ -1917,7 +1918,7 @@ bool Lexer::LexCharConstant(Token &Result, const char *CurPtr,
     if (C == '\n' || C == '\r' ||             // Newline.
         (C == 0 && CurPtr-1 == BufferEnd)) {  // End of file.
       if (!isLexingRawMode() && !LangOpts.AsmPreprocessor)
-        Diag(BufferPtr, diag::ext_unterminated_char);
+        Diag(BufferPtr, diag::ext_unterminated_char_or_string) << 0;
       FormTokenWithChars(Result, CurPtr-1, tok::unknown);
       return true;
     }
@@ -1941,7 +1942,7 @@ bool Lexer::LexCharConstant(Token &Result, const char *CurPtr,
 
   // If a nul character existed in the character, warn about it.
   if (NulCharacter && !isLexingRawMode())
-    Diag(NulCharacter, diag::null_in_char);
+    Diag(NulCharacter, diag::null_in_char_or_string) << 0;
 
   // Update the location of token as well as BufferPtr.
   const char *TokStart = BufferPtr;
@@ -2319,7 +2320,7 @@ bool Lexer::SkipBlockComment(Token &Result, const char *CurPtr,
         '/', '/', '/', '/',  '/', '/', '/', '/'
       };
       while (CurPtr+16 <= BufferEnd &&
-             !vec_any_eq(*(vector unsigned char*)CurPtr, Slashes))
+             !vec_any_eq(*(const vector unsigned char*)CurPtr, Slashes))
         CurPtr += 16;
 #else
       // Scan for '/' quickly.  Many block comments are very large.
@@ -2585,8 +2586,8 @@ static const char *FindConflictEnd(const char *CurPtr, const char *BufferEnd,
   size_t Pos = RestOfBuffer.find(Terminator);
   while (Pos != StringRef::npos) {
     // Must occur at start of line.
-    if (RestOfBuffer[Pos-1] != '\r' &&
-        RestOfBuffer[Pos-1] != '\n') {
+    if (Pos == 0 ||
+        (RestOfBuffer[Pos - 1] != '\r' && RestOfBuffer[Pos - 1] != '\n')) {
       RestOfBuffer = RestOfBuffer.substr(Pos+TermLen);
       Pos = RestOfBuffer.find(Terminator);
       continue;
@@ -3068,6 +3069,11 @@ LexNextToken:
                                ConsumeChar(ConsumeChar(CurPtr, SizeTmp, Result),
                                            SizeTmp2, Result),
                                tok::utf8_string_literal);
+        if (Char2 == '\'' && LangOpts.CPlusPlus1z)
+          return LexCharConstant(
+              Result, ConsumeChar(ConsumeChar(CurPtr, SizeTmp, Result),
+                                  SizeTmp2, Result),
+              tok::utf8_char_constant);
 
         if (Char2 == 'R' && LangOpts.CPlusPlus11) {
           unsigned SizeTmp3;

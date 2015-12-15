@@ -109,12 +109,42 @@ following ``__`` (double underscore) to avoid interference from a macro with
 the same name.  For instance, ``__cxx_rvalue_references__`` can be used instead
 of ``cxx_rvalue_references``.
 
+``__has_cpp_attribute``
+-----------------------
+
+This function-like macro takes a single argument that is the name of a
+C++11-style attribute. The argument can either be a single identifier, or a
+scoped identifier. If the attribute is supported, a nonzero value is returned.
+If the attribute is a standards-based attribute, this macro returns a nonzero
+value based on the year and month in which the attribute was voted into the
+working draft. If the attribute is not supported by the current compliation
+target, this macro evaluates to 0.  It can be used like this:
+
+.. code-block:: c++
+
+  #ifndef __has_cpp_attribute         // Optional of course.
+    #define __has_cpp_attribute(x) 0  // Compatibility with non-clang compilers.
+  #endif
+
+  ...
+  #if __has_cpp_attribute(clang::fallthrough)
+  #define FALLTHROUGH [[clang::fallthrough]]
+  #else
+  #define FALLTHROUGH
+  #endif
+  ...
+
+The attribute identifier (but not scope) can also be specified with a preceding
+and following ``__`` (double underscore) to avoid interference from a macro with
+the same name.  For instance, ``gnu::__const__`` can be used instead of
+``gnu::const``.
+
 ``__has_attribute``
 -------------------
 
 This function-like macro takes a single identifier argument that is the name of
-an attribute.  It evaluates to 1 if the attribute is supported by the current
-compilation target, or 0 if not.  It can be used like this:
+a GNU-style attribute.  It evaluates to 1 if the attribute is supported by the
+current compilation target, or 0 if not.  It can be used like this:
 
 .. code-block:: c++
 
@@ -133,6 +163,33 @@ compilation target, or 0 if not.  It can be used like this:
 The attribute name can also be specified with a preceding and following ``__``
 (double underscore) to avoid interference from a macro with the same name.  For
 instance, ``__always_inline__`` can be used instead of ``always_inline``.
+
+
+``__has_declspec_attribute``
+----------------------------
+
+This function-like macro takes a single identifier argument that is the name of
+an attribute implemented as a Microsoft-style ``__declspec`` attribute.  It
+evaluates to 1 if the attribute is supported by the current compilation target,
+or 0 if not.  It can be used like this:
+
+.. code-block:: c++
+
+  #ifndef __has_declspec_attribute         // Optional of course.
+    #define __has_declspec_attribute(x) 0  // Compatibility with non-clang compilers.
+  #endif
+
+  ...
+  #if __has_declspec_attribute(dllexport)
+  #define DLLEXPORT __declspec(dllexport)
+  #else
+  #define DLLEXPORT
+  #endif
+  ...
+
+The attribute name can also be specified with a preceding and following ``__``
+(double underscore) to avoid interference from a macro with the same name.  For
+instance, ``__dllexport__`` can be used instead of ``dllexport``.
 
 ``__is_identifier``
 -------------------
@@ -358,7 +415,7 @@ dash indicates that an operation is not accepted according to a corresponding
 specification.
 
 ============================== ======= ======= ======= =======
-         Opeator               OpenCL  AltiVec   GCC    NEON
+         Operator              OpenCL  AltiVec   GCC    NEON
 ============================== ======= ======= ======= =======
 []                               yes     yes     yes     --
 unary operators +, --            yes     yes     yes     --
@@ -458,6 +515,13 @@ features are enabled.  The ``__has_extension`` macro can be used to query if
 language features are available as an extension when compiling for a standard
 which does not provide them.  The features which can be tested are listed here.
 
+Since Clang 3.4, the C++ SD-6 feature test macros are also supported.
+These are macros with names of the form ``__cpp_<feature_name>``, and are
+intended to be a portable way to query the supported features of the compiler.
+See `the C++ status page <http://clang.llvm.org/cxx_status.html#ts>`_ for
+information on the version of SD-6 supported by each Clang release, and the
+macros provided by that revision of the recommendations.
+
 C++98
 -----
 
@@ -505,6 +569,9 @@ C++11 alignment specifiers
 
 Use ``__has_feature(cxx_alignas)`` or ``__has_extension(cxx_alignas)`` to
 determine if support for alignment specifiers using ``alignas`` is enabled.
+
+Use ``__has_feature(cxx_alignof)`` or ``__has_extension(cxx_alignof)`` to
+determine if support for the ``alignof`` keyword is enabled.
 
 C++11 attributes
 ^^^^^^^^^^^^^^^^
@@ -751,6 +818,13 @@ Use ``__has_feature(cxx_aggregate_nsdmi)`` or
 ``__has_extension(cxx_aggregate_nsdmi)`` to determine if support
 for default initializers in aggregate members is enabled.
 
+C++1y digit separators
+^^^^^^^^^^^^^^^^^^^^^^
+
+Use ``__cpp_digit_separators`` to determine if support for digit separators
+using single quotes (for instance, ``10'000``) is enabled. At this time, there
+is no corresponding ``__has_feature`` name
+
 C++1y generalized lambda capture
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -813,6 +887,9 @@ C11 alignment specifiers
 Use ``__has_feature(c_alignas)`` or ``__has_extension(c_alignas)`` to determine
 if support for alignment specifiers using ``_Alignas`` is enabled.
 
+Use ``__has_feature(c_alignof)`` or ``__has_extension(c_alignof)`` to determine
+if support for the ``_Alignof`` keyword is enabled.
+
 C11 atomic operations
 ^^^^^^^^^^^^^^^^^^^^^
 
@@ -857,6 +934,14 @@ C11 ``_Thread_local``
 
 Use ``__has_feature(c_thread_local)`` or ``__has_extension(c_thread_local)``
 to determine if support for ``_Thread_local`` variables is enabled.
+
+Modules
+-------
+
+Use ``__has_feature(modules)`` to determine if Modules have been enabled.
+For example, compiling code with ``-fmodules`` enables the use of Modules.
+
+More information could be found `here <http://clang.llvm.org/docs/Modules.html>`_.
 
 Checks for Type Trait Primitives
 ================================
@@ -932,8 +1017,8 @@ The following type trait primitives are supported by Clang:
   ``argtypes...`` such that no non-trivial functions are called as part of
   that initialization.  This trait is required to implement the C++11 standard
   library.
-* ``__is_destructible`` (MSVC 2013): partially implemented
-* ``__is_nothrow_destructible`` (MSVC 2013): partially implemented
+* ``__is_destructible`` (MSVC 2013)
+* ``__is_nothrow_destructible`` (MSVC 2013)
 * ``__is_nothrow_assignable`` (MSVC 2013, clang)
 * ``__is_constructible`` (MSVC 2013, clang)
 * ``__is_nothrow_constructible`` (MSVC 2013, clang)
@@ -1455,6 +1540,33 @@ takes no arguments and produces a void result.
 
 Query for this feature with ``__has_builtin(__builtin_unreachable)``.
 
+``__builtin_unpredictable``
+---------------------------
+
+``__builtin_unpredictable`` is used to indicate that a branch condition is
+unpredictable by hardware mechanisms such as branch prediction logic.
+
+**Syntax**:
+
+.. code-block:: c++
+
+    __builtin_unpredictable(long long)
+
+**Example of use**:
+
+.. code-block:: c++
+
+  if (__builtin_unpredictable(x > 0)) {
+     foo();
+  }
+
+**Description**:
+
+The ``__builtin_unpredictable()`` builtin is expected to be used with control
+flow conditions such as in ``if`` and ``switch`` statements.
+
+Query for this feature with ``__has_builtin(__builtin_unpredictable)``.
+
 ``__sync_swap``
 ---------------
 
@@ -1567,17 +1679,20 @@ an example of their usage:
   errorcode_t security_critical_application(...) {
     unsigned x, y, result;
     ...
-    if (__builtin_umul_overflow(x, y, &result))
+    if (__builtin_mul_overflow(x, y, &result))
       return kErrorCodeHackers;
     ...
     use_multiply(result);
     ...
   }
 
-A complete enumeration of the builtins are:
+Clang provides the following checked arithmetic builtins:
 
 .. code-block:: c
 
+  bool __builtin_add_overflow   (type1 x, type2 y, type3 *sum);
+  bool __builtin_sub_overflow   (type1 x, type2 y, type3 *diff);
+  bool __builtin_mul_overflow   (type1 x, type2 y, type3 *prod);
   bool __builtin_uadd_overflow  (unsigned x, unsigned y, unsigned *sum);
   bool __builtin_uaddl_overflow (unsigned long x, unsigned long y, unsigned long *sum);
   bool __builtin_uaddll_overflow(unsigned long long x, unsigned long long y, unsigned long long *sum);
@@ -1597,6 +1712,21 @@ A complete enumeration of the builtins are:
   bool __builtin_smull_overflow (long x, long y, long *prod);
   bool __builtin_smulll_overflow(long long x, long long y, long long *prod);
 
+Each builtin performs the specified mathematical operation on the
+first two arguments and stores the result in the third argument.  If
+possible, the result will be equal to mathematically-correct result
+and the builtin will return 0.  Otherwise, the builtin will return
+1 and the result will be equal to the unique value that is equivalent
+to the mathematically-correct result modulo two raised to the *k*
+power, where *k* is the number of bits in the result type.  The
+behavior of these builtins is well-defined for all argument values.
+
+The first three builtins work generically for operands of any integer type,
+including boolean types.  The operands need not have the same type as each
+other, or as the result.  The other builtins may implicitly promote or
+convert their operands before performing the operation.
+
+Query for this feature with ``__has_builtin(__builtin_add_overflow)``, etc.
 
 .. _langext-__c11_atomic:
 
@@ -1630,6 +1760,9 @@ The macros ``__ATOMIC_RELAXED``, ``__ATOMIC_CONSUME``, ``__ATOMIC_ACQUIRE``,
 provided, with values corresponding to the enumerators of C11's
 ``memory_order`` enumeration.
 
+(Note that Clang additionally provides GCC-compatible ``__atomic_*``
+builtins)
+
 Low-level ARM exclusive memory builtins
 ---------------------------------------
 
@@ -1645,6 +1778,7 @@ instructions for implementing atomic operations.
   void __builtin_arm_clrex(void);
 
 The types ``T`` currently supported are:
+
 * Integer types with width at most 64 bits (or 128 bits on AArch64).
 * Floating-point types
 * Pointer types.
@@ -1662,6 +1796,26 @@ care should be exercised.
 
 For these reasons the higher level atomic primitives should be preferred where
 possible.
+
+Non-temporal load/store builtins
+--------------------------------
+
+Clang provides overloaded builtins allowing generation of non-temporal memory
+accesses.
+
+.. code-block:: c
+
+  T __builtin_nontemporal_load(T *addr);
+  void __builtin_nontemporal_store(T value, T *addr);
+
+The types ``T`` currently supported are:
+
+* Integer types.
+* Floating-point types.
+* Vector types.
+
+Note that the compiler does not guarantee that non-temporal loads or stores
+will be used.
 
 Non-standard C++11 Attributes
 =============================
@@ -1759,6 +1913,9 @@ with :doc:`ThreadSanitizer`.
 
 Use ``__has_feature(memory_sanitizer)`` to check if the code is being built
 with :doc:`MemorySanitizer`.
+
+Use ``__has_feature(safe_stack)`` to check if the code is being built
+with :doc:`SafeStack`.
 
 
 Extensions for selectively disabling optimization
@@ -1902,11 +2059,23 @@ iterations. Full unrolling is only possible if the loop trip count is known at
 compile time. Partial unrolling replicates the loop body within the loop and
 reduces the trip count.
 
+If ``unroll(enable)`` is specified the unroller will attempt to fully unroll the
+loop if the trip count is known at compile time. If the fully unrolled code size
+is greater than an internal limit the loop will be partially unrolled up to this
+limit. If the trip count is not known at compile time the loop will be partially
+unrolled with a heuristically chosen unroll factor.
+
+.. code-block:: c++
+
+  #pragma clang loop unroll(enable)
+  for(...) {
+    ...
+  }
+
 If ``unroll(full)`` is specified the unroller will attempt to fully unroll the
-loop if the trip count is known at compile time. If the loop count is not known
-or the fully unrolled code size is greater than the limit specified by the
-`-pragma-unroll-threshold` command line option the loop will be partially
-unrolled subject to the same limit.
+loop if the trip count is known at compile time identically to
+``unroll(enable)``. However, with ``unroll(full)`` the loop will not be unrolled
+if the loop count is not known at compile time.
 
 .. code-block:: c++
 
@@ -1918,7 +2087,7 @@ unrolled subject to the same limit.
 The unroll count can be specified explicitly with ``unroll_count(_value_)`` where
 _value_ is a positive integer. If this value is greater than the trip count the
 loop will be fully unrolled. Otherwise the loop is partially unrolled subject
-to the `-pragma-unroll-threshold` limit.
+to the same code size limit as with ``unroll(enable)``.
 
 .. code-block:: c++
 

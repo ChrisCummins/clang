@@ -20,6 +20,7 @@
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/RecursiveASTVisitor.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/Support/Timer.h"
 #include <deque>
@@ -196,9 +197,6 @@ public:
 
   bool shouldVisitTemplateInstantiations() const { return true; }
   bool shouldVisitImplicitCode() const { return true; }
-  // Disables data recursion. We intercept Traverse* methods in the RAV, which
-  // are not triggered during data recursion.
-  bool shouldUseDataRecursionFor(clang::Stmt *S) const { return false; }
 
 private:
   // Used for updating the depth during traversal.
@@ -299,7 +297,7 @@ public:
                   const MatchFinder::MatchFinderOptions &Options)
       : Matchers(Matchers), Options(Options), ActiveASTContext(nullptr) {}
 
-  ~MatchASTVisitor() {
+  ~MatchASTVisitor() override {
     if (Options.CheckProfiling) {
       Options.CheckProfiling->Records = std::move(TimeByBucket);
     }
@@ -307,18 +305,20 @@ public:
 
   void onStartOfTranslationUnit() {
     const bool EnableCheckProfiling = Options.CheckProfiling.hasValue();
+    TimeBucketRegion Timer;
     for (MatchCallback *MC : Matchers->AllCallbacks) {
-      TimeRegion Timer(EnableCheckProfiling ? &TimeByBucket[MC->getID()]
-                                            : nullptr);
+      if (EnableCheckProfiling)
+        Timer.setBucket(&TimeByBucket[MC->getID()]);
       MC->onStartOfTranslationUnit();
     }
   }
 
   void onEndOfTranslationUnit() {
     const bool EnableCheckProfiling = Options.CheckProfiling.hasValue();
+    TimeBucketRegion Timer;
     for (MatchCallback *MC : Matchers->AllCallbacks) {
-      TimeRegion Timer(EnableCheckProfiling ? &TimeByBucket[MC->getID()]
-                                            : nullptr);
+      if (EnableCheckProfiling)
+        Timer.setBucket(&TimeByBucket[MC->getID()]);
       MC->onEndOfTranslationUnit();
     }
   }
@@ -484,35 +484,46 @@ public:
 
   bool shouldVisitTemplateInstantiations() const { return true; }
   bool shouldVisitImplicitCode() const { return true; }
-  // Disables data recursion. We intercept Traverse* methods in the RAV, which
-  // are not triggered during data recursion.
-  bool shouldUseDataRecursionFor(clang::Stmt *S) const { return false; }
 
 private:
-  class TimeRegion {
+  class TimeBucketRegion {
   public:
-    TimeRegion(llvm::TimeRecord *Record) : Record(Record) {
-      if (Record)
-        *Record -= llvm::TimeRecord::getCurrentTime(true);
-    }
-    ~TimeRegion() {
-      if (Record)
-        *Record += llvm::TimeRecord::getCurrentTime(false);
+    TimeBucketRegion() : Bucket(nullptr) {}
+    ~TimeBucketRegion() { setBucket(nullptr); }
+
+    /// \brief Start timing for \p NewBucket.
+    ///
+    /// If there was a bucket already set, it will finish the timing for that
+    /// other bucket.
+    /// \p NewBucket will be timed until the next call to \c setBucket() or
+    /// until the \c TimeBucketRegion is destroyed.
+    /// If \p NewBucket is the same as the currently timed bucket, this call
+    /// does nothing.
+    void setBucket(llvm::TimeRecord *NewBucket) {
+      if (Bucket != NewBucket) {
+        auto Now = llvm::TimeRecord::getCurrentTime(true);
+        if (Bucket)
+          *Bucket += Now;
+        if (NewBucket)
+          *NewBucket -= Now;
+        Bucket = NewBucket;
+      }
     }
 
   private:
-    llvm::TimeRecord *Record;
+    llvm::TimeRecord *Bucket;
   };
 
   /// \brief Runs all the \p Matchers on \p Node.
   ///
   /// Used by \c matchDispatch() below.
   template <typename T, typename MC>
-  void matchImpl(const T &Node, const MC &Matchers) {
+  void matchWithoutFilter(const T &Node, const MC &Matchers) {
     const bool EnableCheckProfiling = Options.CheckProfiling.hasValue();
+    TimeBucketRegion Timer;
     for (const auto &MP : Matchers) {
-      TimeRegion Timer(EnableCheckProfiling ? &TimeByBucket[MP.second->getID()]
-                                            : nullptr);
+      if (EnableCheckProfiling)
+        Timer.setBucket(&TimeByBucket[MP.second->getID()]);
       BoundNodesTreeBuilder Builder;
       if (MP.first.matches(Node, this, &Builder)) {
         MatchVisitor Visitor(ActiveASTContext, MP.second);
@@ -521,22 +532,66 @@ private:
     }
   }
 
+  void matchWithFilter(const ast_type_traits::DynTypedNode &DynNode) {
+    auto Kind = DynNode.getNodeKind();
+    auto it = MatcherFiltersMap.find(Kind);
+    const auto &Filter =
+        it != MatcherFiltersMap.end() ? it->second : getFilterForKind(Kind);
+
+    if (Filter.empty())
+      return;
+
+    const bool EnableCheckProfiling = Options.CheckProfiling.hasValue();
+    TimeBucketRegion Timer;
+    auto &Matchers = this->Matchers->DeclOrStmt;
+    for (unsigned short I : Filter) {
+      auto &MP = Matchers[I];
+      if (EnableCheckProfiling)
+        Timer.setBucket(&TimeByBucket[MP.second->getID()]);
+      BoundNodesTreeBuilder Builder;
+      if (MP.first.matchesNoKindCheck(DynNode, this, &Builder)) {
+        MatchVisitor Visitor(ActiveASTContext, MP.second);
+        Builder.visitMatches(&Visitor);
+      }
+    }
+  }
+
+  const std::vector<unsigned short> &
+  getFilterForKind(ast_type_traits::ASTNodeKind Kind) {
+    auto &Filter = MatcherFiltersMap[Kind];
+    auto &Matchers = this->Matchers->DeclOrStmt;
+    assert((Matchers.size() < USHRT_MAX) && "Too many matchers.");
+    for (unsigned I = 0, E = Matchers.size(); I != E; ++I) {
+      if (Matchers[I].first.canMatchNodesOfKind(Kind)) {
+        Filter.push_back(I);
+      }
+    }
+    return Filter;
+  }
+
   /// @{
   /// \brief Overloads to pair the different node types to their matchers.
-  void matchDispatch(const Decl *Node) { matchImpl(*Node, Matchers->Decl); }
-  void matchDispatch(const Stmt *Node) { matchImpl(*Node, Matchers->Stmt); }
+  void matchDispatch(const Decl *Node) {
+    return matchWithFilter(ast_type_traits::DynTypedNode::create(*Node));
+  }
+  void matchDispatch(const Stmt *Node) {
+    return matchWithFilter(ast_type_traits::DynTypedNode::create(*Node));
+  }
+
   void matchDispatch(const Type *Node) {
-    matchImpl(QualType(Node, 0), Matchers->Type);
+    matchWithoutFilter(QualType(Node, 0), Matchers->Type);
   }
   void matchDispatch(const TypeLoc *Node) {
-    matchImpl(*Node, Matchers->TypeLoc);
+    matchWithoutFilter(*Node, Matchers->TypeLoc);
   }
-  void matchDispatch(const QualType *Node) { matchImpl(*Node, Matchers->Type); }
+  void matchDispatch(const QualType *Node) {
+    matchWithoutFilter(*Node, Matchers->Type);
+  }
   void matchDispatch(const NestedNameSpecifier *Node) {
-    matchImpl(*Node, Matchers->NestedNameSpecifier);
+    matchWithoutFilter(*Node, Matchers->NestedNameSpecifier);
   }
   void matchDispatch(const NestedNameSpecifierLoc *Node) {
-    matchImpl(*Node, Matchers->NestedNameSpecifierLoc);
+    matchWithoutFilter(*Node, Matchers->NestedNameSpecifierLoc);
   }
   void matchDispatch(const void *) { /* Do nothing. */ }
   /// @}
@@ -560,9 +615,6 @@ private:
     if (Node.get<TranslationUnitDecl>() ==
         ActiveASTContext->getTranslationUnitDecl())
       return false;
-    assert(Node.getMemoizationData() &&
-           "Invariant broken: only nodes that support memoization may be "
-           "used in the parent map.");
 
     MatchKey Key;
     Key.MatcherID = Matcher.getID();
@@ -669,6 +721,18 @@ private:
   llvm::StringMap<llvm::TimeRecord> TimeByBucket;
 
   const MatchFinder::MatchersByType *Matchers;
+
+  /// \brief Filtered list of matcher indices for each matcher kind.
+  ///
+  /// \c Decl and \c Stmt toplevel matchers usually apply to a specific node
+  /// kind (and derived kinds) so it is a waste to try every matcher on every
+  /// node.
+  /// We precalculate a list of matchers that pass the toplevel restrict check.
+  /// This also allows us to skip the restrict check at matching time. See
+  /// use \c matchesNoKindCheck() above.
+  llvm::DenseMap<ast_type_traits::ASTNodeKind, std::vector<unsigned short>>
+      MatcherFiltersMap;
+
   const MatchFinder::MatchFinderOptions &Options;
   ASTContext *ActiveASTContext;
 
@@ -794,7 +858,11 @@ bool MatchASTVisitor::TraverseNestedNameSpecifier(NestedNameSpecifier *NNS) {
 
 bool MatchASTVisitor::TraverseNestedNameSpecifierLoc(
     NestedNameSpecifierLoc NNS) {
+  if (!NNS)
+    return true;
+
   match(NNS);
+
   // We only match the nested name specifier here (as opposed to traversing it)
   // because the traversal is already done in the parallel "Loc"-hierarchy.
   if (NNS.hasQualifier())
@@ -839,38 +907,38 @@ MatchFinder::~MatchFinder() {}
 
 void MatchFinder::addMatcher(const DeclarationMatcher &NodeMatch,
                              MatchCallback *Action) {
-  Matchers.Decl.push_back(std::make_pair(NodeMatch, Action));
-  Matchers.AllCallbacks.push_back(Action);
+  Matchers.DeclOrStmt.emplace_back(NodeMatch, Action);
+  Matchers.AllCallbacks.insert(Action);
 }
 
 void MatchFinder::addMatcher(const TypeMatcher &NodeMatch,
                              MatchCallback *Action) {
-  Matchers.Type.push_back(std::make_pair(NodeMatch, Action));
-  Matchers.AllCallbacks.push_back(Action);
+  Matchers.Type.emplace_back(NodeMatch, Action);
+  Matchers.AllCallbacks.insert(Action);
 }
 
 void MatchFinder::addMatcher(const StatementMatcher &NodeMatch,
                              MatchCallback *Action) {
-  Matchers.Stmt.push_back(std::make_pair(NodeMatch, Action));
-  Matchers.AllCallbacks.push_back(Action);
+  Matchers.DeclOrStmt.emplace_back(NodeMatch, Action);
+  Matchers.AllCallbacks.insert(Action);
 }
 
 void MatchFinder::addMatcher(const NestedNameSpecifierMatcher &NodeMatch,
                              MatchCallback *Action) {
-  Matchers.NestedNameSpecifier.push_back(std::make_pair(NodeMatch, Action));
-  Matchers.AllCallbacks.push_back(Action);
+  Matchers.NestedNameSpecifier.emplace_back(NodeMatch, Action);
+  Matchers.AllCallbacks.insert(Action);
 }
 
 void MatchFinder::addMatcher(const NestedNameSpecifierLocMatcher &NodeMatch,
                              MatchCallback *Action) {
-  Matchers.NestedNameSpecifierLoc.push_back(std::make_pair(NodeMatch, Action));
-  Matchers.AllCallbacks.push_back(Action);
+  Matchers.NestedNameSpecifierLoc.emplace_back(NodeMatch, Action);
+  Matchers.AllCallbacks.insert(Action);
 }
 
 void MatchFinder::addMatcher(const TypeLocMatcher &NodeMatch,
                              MatchCallback *Action) {
-  Matchers.TypeLoc.push_back(std::make_pair(NodeMatch, Action));
-  Matchers.AllCallbacks.push_back(Action);
+  Matchers.TypeLoc.emplace_back(NodeMatch, Action);
+  Matchers.AllCallbacks.insert(Action);
 }
 
 bool MatchFinder::addDynamicMatcher(const internal::DynTypedMatcher &NodeMatch,

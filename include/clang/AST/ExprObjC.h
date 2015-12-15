@@ -82,11 +82,13 @@ public:
   }
     
   // Iterators
-  child_range children() { return child_range(); }
+  child_range children() {
+    return child_range(child_iterator(), child_iterator());
+  }
 };
 
 /// ObjCBoxedExpr - used for generalized expression boxing.
-/// as in: @(strdup("hello world")) or @(random())
+/// as in: @(strdup("hello world")), @(random()) or @(view.frame)
 /// Also used for boxing non-parenthesized numeric literals;
 /// as in: @42 or \@true (c++/objc++) or \@__yes (c/objc).
 class ObjCBoxedExpr : public Expr {
@@ -124,6 +126,15 @@ public:
   
   // Iterators
   child_range children() { return child_range(&SubExpr, &SubExpr+1); }
+
+  typedef ConstExprIterator const_arg_iterator;
+
+  const_arg_iterator arg_begin() const {
+    return reinterpret_cast<Stmt const * const*>(&SubExpr);
+  }
+  const_arg_iterator arg_end() const {
+    return reinterpret_cast<Stmt const * const*>(&SubExpr + 1);
+  }
   
   friend class ASTStmtReader;
 };
@@ -134,13 +145,9 @@ class ObjCArrayLiteral : public Expr {
   unsigned NumElements;
   SourceRange Range;
   ObjCMethodDecl *ArrayWithObjectsMethod;
-  /// \brief in arc mode, this field holds array allocation method declaration.
-  /// In MRR mode, it is null
-  ObjCMethodDecl *ArrayAllocMethod;
   
   ObjCArrayLiteral(ArrayRef<Expr *> Elements,
                    QualType T, ObjCMethodDecl * Method,
-                   ObjCMethodDecl *allocMethod,
                    SourceRange SR);
   
   explicit ObjCArrayLiteral(EmptyShell Empty, unsigned NumElements)
@@ -150,7 +157,6 @@ public:
   static ObjCArrayLiteral *Create(const ASTContext &C,
                                   ArrayRef<Expr *> Elements,
                                   QualType T, ObjCMethodDecl * Method,
-                                  ObjCMethodDecl *allocMethod,
                                   SourceRange SR);
 
   static ObjCArrayLiteral *CreateEmpty(const ASTContext &C,
@@ -187,10 +193,6 @@ public:
     
   ObjCMethodDecl *getArrayWithObjectsMethod() const {
     return ArrayWithObjectsMethod; 
-  }
-    
-  ObjCMethodDecl *getArrayAllocMethod() const {
-    return ArrayAllocMethod;
   }
     
   // Iterators
@@ -265,15 +267,10 @@ class ObjCDictionaryLiteral : public Expr {
   
   SourceRange Range;
   ObjCMethodDecl *DictWithObjectsMethod;
-
-  /// \brief for arc-specific dictionary literals, this field is used to store
-  /// NSDictionary allocation method declaration. It is null for MRR mode.
-  ObjCMethodDecl *DictAllocMethod;
     
   ObjCDictionaryLiteral(ArrayRef<ObjCDictionaryElement> VK, 
                         bool HasPackExpansions,
                         QualType T, ObjCMethodDecl *method,
-                        ObjCMethodDecl *allocMethod,
                         SourceRange SR);
 
   explicit ObjCDictionaryLiteral(EmptyShell Empty, unsigned NumElements,
@@ -308,7 +305,6 @@ public:
                                        ArrayRef<ObjCDictionaryElement> VK, 
                                        bool HasPackExpansions,
                                        QualType T, ObjCMethodDecl *method,
-                                       ObjCMethodDecl *allocMethod,
                                        SourceRange SR);
   
   static ObjCDictionaryLiteral *CreateEmpty(const ASTContext &C,
@@ -335,9 +331,6 @@ public:
   ObjCMethodDecl *getDictWithObjectsMethod() const
     { return DictWithObjectsMethod; }
 
-  ObjCMethodDecl *getDictAllocMethod() const
-    { return DictAllocMethod; }
-
   SourceLocation getLocStart() const LLVM_READONLY { return Range.getBegin(); }
   SourceLocation getLocEnd() const LLVM_READONLY { return Range.getEnd(); }
   SourceRange getSourceRange() const LLVM_READONLY { return Range; }
@@ -350,6 +343,8 @@ public:
   child_range children() { 
     // Note: we're taking advantage of the layout of the KeyValuePair struct
     // here. If that struct changes, this code will need to change as well.
+    static_assert(sizeof(KeyValuePair) == sizeof(Stmt *) * 2,
+                  "KeyValuePair is expected size");
     return child_range(reinterpret_cast<Stmt **>(this + 1),
                        reinterpret_cast<Stmt **>(this + 1) + NumElements * 2);
   }
@@ -398,7 +393,9 @@ public:
   }
 
   // Iterators
-  child_range children() { return child_range(); }
+  child_range children() {
+    return child_range(child_iterator(), child_iterator());
+  }
 };
 
 /// ObjCSelectorExpr used for \@selector in Objective-C.
@@ -433,7 +430,9 @@ public:
   }
 
   // Iterators
-  child_range children() { return child_range(); }
+  child_range children() {
+    return child_range(child_iterator(), child_iterator());
+  }
 };
 
 /// ObjCProtocolExpr used for protocol expression in Objective-C.
@@ -473,7 +472,9 @@ public:
   }
 
   // Iterators
-  child_range children() { return child_range(); }
+  child_range children() {
+    return child_range(child_iterator(), child_iterator());
+  }
 
   friend class ASTStmtReader;
   friend class ASTStmtWriter;
@@ -696,46 +697,16 @@ public:
   QualType getSuperReceiverType() const { 
     return QualType(Receiver.get<const Type*>(), 0); 
   }
-  QualType getGetterResultType() const {
-    QualType ResultType;
-    if (isExplicitProperty()) {
-      const ObjCPropertyDecl *PDecl = getExplicitProperty();
-      if (const ObjCMethodDecl *Getter = PDecl->getGetterMethodDecl())
-        ResultType = Getter->getReturnType();
-      else
-        ResultType = PDecl->getType();
-    } else {
-      const ObjCMethodDecl *Getter = getImplicitPropertyGetter();
-      if (Getter)
-        ResultType = Getter->getReturnType(); // with reference!
-    }
-    return ResultType;
-  }
 
-  QualType getSetterArgType() const {
-    QualType ArgType;
-    if (isImplicitProperty()) {
-      const ObjCMethodDecl *Setter = getImplicitPropertySetter();
-      ObjCMethodDecl::param_const_iterator P = Setter->param_begin(); 
-      ArgType = (*P)->getType();
-    } else {
-      if (ObjCPropertyDecl *PDecl = getExplicitProperty())
-        if (const ObjCMethodDecl *Setter = PDecl->getSetterMethodDecl()) {
-          ObjCMethodDecl::param_const_iterator P = Setter->param_begin(); 
-          ArgType = (*P)->getType();
-        }
-      if (ArgType.isNull())
-        ArgType = getType();
-    }
-    return ArgType;
-  }
-  
   ObjCInterfaceDecl *getClassReceiver() const {
     return Receiver.get<ObjCInterfaceDecl*>();
   }
   bool isObjectReceiver() const { return Receiver.is<Stmt*>(); }
   bool isSuperReceiver() const { return Receiver.is<const Type*>(); }
   bool isClassReceiver() const { return Receiver.is<ObjCInterfaceDecl*>(); }
+
+  /// Determine the type of the base, regardless of the kind of receiver.
+  QualType getReceiverType(const ASTContext &ctx) const;
 
   SourceLocation getLocStart() const LLVM_READONLY {
     return isObjectReceiver() ? getBase()->getLocStart() :getReceiverLocation();
@@ -752,7 +723,7 @@ public:
       Stmt **begin = reinterpret_cast<Stmt**>(&Receiver); // hack!
       return child_range(begin, begin+1);
     }
-    return child_range();
+    return child_range(child_iterator(), child_iterator());
   }
 
 private:
@@ -1388,6 +1359,14 @@ public:
 
   typedef ExprIterator arg_iterator;
   typedef ConstExprIterator const_arg_iterator;
+
+  llvm::iterator_range<arg_iterator> arguments() {
+    return llvm::make_range(arg_begin(), arg_end());
+  }
+
+  llvm::iterator_range<const_arg_iterator> arguments() const {
+    return llvm::make_range(arg_begin(), arg_end());
+  }
 
   arg_iterator arg_begin() { return reinterpret_cast<Stmt **>(getArgs()); }
   arg_iterator arg_end()   { 

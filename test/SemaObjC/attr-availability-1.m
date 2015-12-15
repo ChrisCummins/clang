@@ -3,6 +3,10 @@
 // RUN: %clang_cc1 -x objective-c++ -std=c++03 -triple x86_64-apple-darwin9.0.0 -fsyntax-only -verify %s
 // rdar://18490958
 
+#if !__has_feature(attribute_availability_with_version_underscores)
+# error "missing feature"
+#endif
+
 @protocol P
 - (void)proto_method __attribute__((availability(macosx,introduced=10_1,deprecated=10_2))); // expected-note 2 {{'proto_method' has been explicitly marked deprecated here}}
 @end
@@ -95,3 +99,22 @@ id NSNibOwner, topNibObjects;
 - (void)Meth1 __attribute__((availability(macosx,introduced=10.3_0))); // expected-warning {{use same version number separators '_' or '.'}}
 - (void)Meth2 __attribute__((availability(macosx,introduced=10_3.1))); // expected-warning {{use same version number separators '_' or '.'}}
 @end
+
+// rdar://18804883
+@protocol P18804883
+- (void)proto_method __attribute__((availability(macosx,introduced=10_1,deprecated=NA))); // means nothing (not deprecated)
+@end
+
+@interface A18804883 <P18804883>
+- (void)interface_method __attribute__((availability(macosx,introduced=NA))); // expected-note {{'interface_method' has been explicitly marked unavailable here}}
+- (void)strange_method __attribute__((availability(macosx,introduced=NA,deprecated=NA)));  // expected-note {{'strange_method' has been explicitly marked unavailable here}}
+- (void) always_available __attribute__((availability(macosx,deprecated=NA)));
+@end
+
+void foo (A18804883* pa) {
+  [pa interface_method]; // expected-error {{'interface_method' is unavailable: not available on OS X}}
+  [pa proto_method];
+  [pa strange_method]; // expected-error {{'strange_method' is unavailable: not available on OS X}}
+  [pa always_available];
+}
+

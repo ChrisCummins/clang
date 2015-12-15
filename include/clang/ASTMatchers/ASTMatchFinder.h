@@ -42,6 +42,7 @@
 #define LLVM_CLANG_ASTMATCHERS_ASTMATCHFINDER_H
 
 #include "clang/ASTMatchers/ASTMatchers.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/Support/Timer.h"
 
@@ -199,16 +200,16 @@ public:
   /// \brief For each \c Matcher<> a \c MatchCallback that will be called
   /// when it matches.
   struct MatchersByType {
-    std::vector<std::pair<DeclarationMatcher, MatchCallback *>> Decl;
+    std::vector<std::pair<internal::DynTypedMatcher, MatchCallback *>>
+        DeclOrStmt;
     std::vector<std::pair<TypeMatcher, MatchCallback *>> Type;
-    std::vector<std::pair<StatementMatcher, MatchCallback *>> Stmt;
     std::vector<std::pair<NestedNameSpecifierMatcher, MatchCallback *>>
         NestedNameSpecifier;
     std::vector<std::pair<NestedNameSpecifierLocMatcher, MatchCallback *>>
         NestedNameSpecifierLoc;
     std::vector<std::pair<TypeLocMatcher, MatchCallback *>> TypeLoc;
     /// \brief All the callbacks in one container to simplify iteration.
-    std::vector<MatchCallback *> AllCallbacks;
+    llvm::SmallPtrSet<MatchCallback *, 16> AllCallbacks;
   };
 
 private:

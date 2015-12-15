@@ -991,24 +991,28 @@ namespace dr289 { // dr289: yes
 namespace dr294 { // dr294: no
   void f() throw(int);
   int main() {
-    // FIXME: we reject this for the wrong reason, because we don't implement
-    // dr87 yet.
-    (void)static_cast<void (*)() throw()>(f); // expected-error {{not superset}}
-    void (*p)() throw() = f; // expected-error {{not superset}}
-
+    (void)static_cast<void (*)() throw()>(f); // FIXME: ill-formed
     (void)static_cast<void (*)() throw(int)>(f); // FIXME: ill-formed
+
+    void (*p)() throw() = f; // expected-error {{not superset}}
+    void (*q)() throw(int) = f;
   }
 }
 
-namespace dr295 { // dr295: no
+namespace dr295 { // dr295: 3.7
   typedef int f();
-  // FIXME: This warning is incorrect.
-  const f g; // expected-warning {{unspecified behavior}}
-  const f &r = g; // expected-warning {{unspecified behavior}}
+  const f g; // expected-warning {{'const' qualifier on function type 'f' (aka 'int ()') has no effect}}
+  f &r = g;
   template<typename T> struct X {
     const T &f;
   };
-  X<f> x = {g}; // FIXME: expected-error {{drops qualifiers}}
+  X<f> x = {g};
+
+  typedef int U();
+  typedef const U U; // expected-warning {{'const' qualifier on function type 'U' (aka 'int ()') has no effect}}
+
+  typedef int (*V)();
+  typedef volatile U *V; // expected-warning {{'volatile' qualifier on function type 'U' (aka 'int ()') has no effect}}
 }
 
 namespace dr296 { // dr296: yes

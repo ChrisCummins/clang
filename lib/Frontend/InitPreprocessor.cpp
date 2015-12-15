@@ -20,6 +20,7 @@
 #include "clang/Frontend/FrontendDiagnostic.h"
 #include "clang/Frontend/FrontendOptions.h"
 #include "clang/Lex/HeaderSearch.h"
+#include "clang/Lex/PTHManager.h"
 #include "clang/Lex/Preprocessor.h"
 #include "clang/Lex/PreprocessorOptions.h"
 #include "clang/Serialization/ASTReader.h"
@@ -97,10 +98,11 @@ static void AddImplicitIncludePTH(MacroBuilder &Builder, Preprocessor &PP,
 /// \brief Add an implicit \#include using the original file used to generate
 /// a PCH file.
 static void AddImplicitIncludePCH(MacroBuilder &Builder, Preprocessor &PP,
+                                  const PCHContainerReader &PCHContainerRdr,
                                   StringRef ImplicitIncludePCH) {
   std::string OriginalFile =
-    ASTReader::getOriginalSourceFile(ImplicitIncludePCH, PP.getFileManager(),
-                                     PP.getDiagnostics());
+      ASTReader::getOriginalSourceFile(ImplicitIncludePCH, PP.getFileManager(),
+                                       PCHContainerRdr, PP.getDiagnostics());
   if (OriginalFile.empty())
     return;
 
@@ -133,6 +135,7 @@ static void DefineFloatMacros(MacroBuilder &Builder, StringRef Prefix,
                      "4.94065645841246544176568792868221e-324",
                      "6.47517511943802511092443895822764655e-4966");
   int Digits = PickFP(Sem, 6, 15, 18, 31, 33);
+  int DecimalDigits = PickFP(Sem, 9, 17, 21, 33, 36);
   Epsilon = PickFP(Sem, "1.19209290e-7", "2.2204460492503131e-16",
                    "1.08420217248550443401e-19",
                    "4.94065645841246544176568792868221e-324",
@@ -159,6 +162,7 @@ static void DefineFloatMacros(MacroBuilder &Builder, StringRef Prefix,
   Builder.defineMacro(DefPrefix + "DENORM_MIN__", Twine(DenormMin)+Ext);
   Builder.defineMacro(DefPrefix + "HAS_DENORM__");
   Builder.defineMacro(DefPrefix + "DIG__", Twine(Digits));
+  Builder.defineMacro(DefPrefix + "DECIMAL_DIG__", Twine(DecimalDigits));
   Builder.defineMacro(DefPrefix + "EPSILON__", Twine(Epsilon)+Ext);
   Builder.defineMacro(DefPrefix + "HAS_INFINITY__");
   Builder.defineMacro(DefPrefix + "HAS_QUIET_NAN__");
@@ -320,15 +324,17 @@ static void AddObjCXXARCLibstdcxxDefines(const LangOptions &LangOpts,
     
     Out << "template<typename _Tp> struct __is_scalar;\n"
         << "\n";
+
+    if (LangOpts.ObjCAutoRefCount) {
+      Out << "template<typename _Tp>\n"
+          << "struct __is_scalar<__attribute__((objc_ownership(strong))) _Tp> {\n"
+          << "  enum { __value = 0 };\n"
+          << "  typedef __false_type __type;\n"
+          << "};\n"
+          << "\n";
+    }
       
-    Out << "template<typename _Tp>\n"
-        << "struct __is_scalar<__attribute__((objc_ownership(strong))) _Tp> {\n"
-        << "  enum { __value = 0 };\n"
-        << "  typedef __false_type __type;\n"
-        << "};\n"
-        << "\n";
-      
-    if (LangOpts.ObjCARCWeak) {
+    if (LangOpts.ObjCWeak) {
       Out << "template<typename _Tp>\n"
           << "struct __is_scalar<__attribute__((objc_ownership(weak))) _Tp> {\n"
           << "  enum { __value = 0 };\n"
@@ -337,13 +343,15 @@ static void AddObjCXXARCLibstdcxxDefines(const LangOptions &LangOpts,
           << "\n";
     }
     
-    Out << "template<typename _Tp>\n"
-        << "struct __is_scalar<__attribute__((objc_ownership(autoreleasing)))"
-        << " _Tp> {\n"
-        << "  enum { __value = 0 };\n"
-        << "  typedef __false_type __type;\n"
-        << "};\n"
-        << "\n";
+    if (LangOpts.ObjCAutoRefCount) {
+      Out << "template<typename _Tp>\n"
+          << "struct __is_scalar<__attribute__((objc_ownership(autoreleasing)))"
+          << " _Tp> {\n"
+          << "  enum { __value = 0 };\n"
+          << "  typedef __false_type __type;\n"
+          << "};\n"
+          << "\n";
+    }
       
     Out << "}\n";
   }
@@ -403,12 +411,20 @@ static void InitializeStandardPredefinedMacros(const TargetInfo &TI,
   // Not "standard" per se, but available even with the -undef flag.
   if (LangOpts.AsmPreprocessor)
     Builder.defineMacro("__ASSEMBLER__");
+  if (LangOpts.CUDA)
+    Builder.defineMacro("__CUDA__");
 }
 
 /// Initialize the predefined C++ language feature test macros defined in
 /// ISO/IEC JTC1/SC22/WG21 (C++) SD-6: "SG10 Feature Test Recommendations".
 static void InitializeCPlusPlusFeatureTestMacros(const LangOptions &LangOpts,
                                                  MacroBuilder &Builder) {
+  // C++98 features.
+  if (LangOpts.RTTI)
+    Builder.defineMacro("__cpp_rtti", "199711");
+  if (LangOpts.CXXExceptions)
+    Builder.defineMacro("__cpp_exceptions", "199711");
+
   // C++11 features.
   if (LangOpts.CPlusPlus11) {
     Builder.defineMacro("__cpp_unicode_characters", "200704");
@@ -418,16 +434,24 @@ static void InitializeCPlusPlusFeatureTestMacros(const LangOptions &LangOpts,
     Builder.defineMacro("__cpp_lambdas", "200907");
     Builder.defineMacro("__cpp_constexpr",
                         LangOpts.CPlusPlus14 ? "201304" : "200704");
+    Builder.defineMacro("__cpp_range_based_for", "200907");
     Builder.defineMacro("__cpp_static_assert", "200410");
     Builder.defineMacro("__cpp_decltype", "200707");
     Builder.defineMacro("__cpp_attributes", "200809");
     Builder.defineMacro("__cpp_rvalue_references", "200610");
     Builder.defineMacro("__cpp_variadic_templates", "200704");
+    Builder.defineMacro("__cpp_initializer_lists", "200806");
+    Builder.defineMacro("__cpp_delegating_constructors", "200604");
+    Builder.defineMacro("__cpp_nsdmi", "200809");
+    Builder.defineMacro("__cpp_inheriting_constructors", "200802");
+    Builder.defineMacro("__cpp_ref_qualifiers", "200710");
+    Builder.defineMacro("__cpp_alias_templates", "200704");
   }
 
   // C++14 features.
   if (LangOpts.CPlusPlus14) {
     Builder.defineMacro("__cpp_binary_literals", "201304");
+    Builder.defineMacro("__cpp_digit_separators", "201309");
     Builder.defineMacro("__cpp_init_captures", "201304");
     Builder.defineMacro("__cpp_generic_lambdas", "201304");
     Builder.defineMacro("__cpp_decltype_auto", "201304");
@@ -435,6 +459,12 @@ static void InitializeCPlusPlusFeatureTestMacros(const LangOptions &LangOpts,
     Builder.defineMacro("__cpp_aggregate_nsdmi", "201304");
     Builder.defineMacro("__cpp_variable_templates", "201304");
   }
+  if (LangOpts.SizedDeallocation)
+    Builder.defineMacro("__cpp_sized_deallocation", "201309");
+  if (LangOpts.ConceptsTS)
+    Builder.defineMacro("__cpp_experimental_concepts", "1");
+  if (LangOpts.Coroutines)
+    Builder.defineMacro("__cpp_coroutines", "1");
 }
 
 static void InitializePredefinedMacros(const TargetInfo &TI,
@@ -550,14 +580,12 @@ static void InitializePredefinedMacros(const TargetInfo &TI,
     Builder.defineMacro("__BLOCKS__");
   }
 
-  if (!LangOpts.MSVCCompat && LangOpts.CXXExceptions)
+  if (!LangOpts.MSVCCompat && LangOpts.Exceptions)
     Builder.defineMacro("__EXCEPTIONS");
   if (!LangOpts.MSVCCompat && LangOpts.RTTI)
     Builder.defineMacro("__GXX_RTTI");
   if (LangOpts.SjLjExceptions)
     Builder.defineMacro("__USING_SJLJ_EXCEPTIONS__");
-  if (LangOpts.SEHExceptions)
-    Builder.defineMacro("__SEH__");
 
   if (LangOpts.Deprecated)
     Builder.defineMacro("__DEPRECATED");
@@ -691,6 +719,10 @@ static void InitializePredefinedMacros(const TargetInfo &TI,
   Builder.defineMacro("__POINTER_WIDTH__",
                       Twine((int)TI.getPointerWidth(0)));
 
+  // Define __BIGGEST_ALIGNMENT__ to be compatible with gcc.
+  Builder.defineMacro("__BIGGEST_ALIGNMENT__",
+                      Twine(TI.getSuitableAlign() / TI.getCharWidth()) );
+
   if (!LangOpts.CharIsSigned)
     Builder.defineMacro("__CHAR_UNSIGNED__");
 
@@ -770,7 +802,7 @@ static void InitializePredefinedMacros(const TargetInfo &TI,
     Builder.defineMacro("__FINITE_MATH_ONLY__", "0");
 
   if (!LangOpts.MSVCCompat) {
-    if (LangOpts.GNUInline)
+    if (LangOpts.GNUInline || LangOpts.CPlusPlus)
       Builder.defineMacro("__GNUC_GNU_INLINE__");
     else
       Builder.defineMacro("__GNUC_STDC_INLINE__");
@@ -817,8 +849,7 @@ static void InitializePredefinedMacros(const TargetInfo &TI,
   // Macros to control C99 numerics and <float.h>
   Builder.defineMacro("__FLT_EVAL_METHOD__", Twine(TI.getFloatEvalMethod()));
   Builder.defineMacro("__FLT_RADIX__", "2");
-  int Dig = PickFP(&TI.getLongDoubleFormat(), -1/*FIXME*/, 17, 21, 33, 36);
-  Builder.defineMacro("__DECIMAL_DIG__", Twine(Dig));
+  Builder.defineMacro("__DECIMAL_DIG__", "__LDBL_DECIMAL_DIG__");
 
   if (LangOpts.getStackProtector() == LangOptions::SSPOn)
     Builder.defineMacro("__SSP__");
@@ -827,9 +858,6 @@ static void InitializePredefinedMacros(const TargetInfo &TI,
   else if (LangOpts.getStackProtector() == LangOptions::SSPReq)
     Builder.defineMacro("__SSP_ALL__", "3");
 
-  if (FEOpts.ProgramAction == frontend::RewriteObjC)
-    Builder.defineMacro("__weak", "__attribute__((objc_gc(weak)))");
-
   // Define a macro that exists only when using the static analyzer.
   if (FEOpts.ProgramAction == frontend::RunAnalysis)
     Builder.defineMacro("__clang_analyzer__");
@@ -837,13 +865,27 @@ static void InitializePredefinedMacros(const TargetInfo &TI,
   if (LangOpts.FastRelaxedMath)
     Builder.defineMacro("__FAST_RELAXED_MATH__");
 
-  if (LangOpts.ObjCAutoRefCount) {
+  if (FEOpts.ProgramAction == frontend::RewriteObjC ||
+      LangOpts.getGC() != LangOptions::NonGC) {
+    Builder.defineMacro("__weak", "__attribute__((objc_gc(weak)))");
+    Builder.defineMacro("__strong", "__attribute__((objc_gc(strong)))");
+    Builder.defineMacro("__autoreleasing", "");
+    Builder.defineMacro("__unsafe_unretained", "");
+  } else if (LangOpts.ObjC1) {
     Builder.defineMacro("__weak", "__attribute__((objc_ownership(weak)))");
     Builder.defineMacro("__strong", "__attribute__((objc_ownership(strong)))");
     Builder.defineMacro("__autoreleasing",
                         "__attribute__((objc_ownership(autoreleasing)))");
     Builder.defineMacro("__unsafe_unretained",
                         "__attribute__((objc_ownership(none)))");
+  }
+
+  // On Darwin, there are __double_underscored variants of the type
+  // nullability qualifiers.
+  if (TI.getTriple().isOSDarwin()) {
+    Builder.defineMacro("__nonnull", "_Nonnull");
+    Builder.defineMacro("__null_unspecified", "_Null_unspecified");
+    Builder.defineMacro("__nullable", "_Nullable");
   }
 
   // OpenMP definition
@@ -856,6 +898,13 @@ static void InitializePredefinedMacros(const TargetInfo &TI,
     Builder.defineMacro("_OPENMP", "201307");
   }
 
+  // CUDA device path compilaton
+  if (LangOpts.CUDAIsDevice) {
+    // The CUDA_ARCH value is set for the GPU target specified in the NVPTX
+    // backend's target defines.
+    Builder.defineMacro("__CUDA_ARCH__");
+  }
+
   // Get other target #defines.
   TI.getTargetDefines(LangOpts, Builder);
 }
@@ -863,9 +912,10 @@ static void InitializePredefinedMacros(const TargetInfo &TI,
 /// InitializePreprocessor - Initialize the preprocessor getting it and the
 /// environment ready to process a single file. This returns true on error.
 ///
-void clang::InitializePreprocessor(Preprocessor &PP,
-                                   const PreprocessorOptions &InitOpts,
-                                   const FrontendOptions &FEOpts) {
+void clang::InitializePreprocessor(
+    Preprocessor &PP, const PreprocessorOptions &InitOpts,
+    const PCHContainerReader &PCHContainerRdr,
+    const FrontendOptions &FEOpts) {
   const LangOptions &LangOpts = PP.getLangOpts();
   std::string PredefineBuffer;
   PredefineBuffer.reserve(4080);
@@ -880,14 +930,19 @@ void clang::InitializePreprocessor(Preprocessor &PP,
 
   // Install things like __POWERPC__, __GNUC__, etc into the macro table.
   if (InitOpts.UsePredefines) {
+    if (LangOpts.CUDA && PP.getAuxTargetInfo())
+      InitializePredefinedMacros(*PP.getAuxTargetInfo(), LangOpts, FEOpts,
+                                 Builder);
+
     InitializePredefinedMacros(PP.getTargetInfo(), LangOpts, FEOpts, Builder);
 
     // Install definitions to make Objective-C++ ARC work well with various
     // C++ Standard Library implementations.
-    if (LangOpts.ObjC1 && LangOpts.CPlusPlus && LangOpts.ObjCAutoRefCount) {
+    if (LangOpts.ObjC1 && LangOpts.CPlusPlus &&
+        (LangOpts.ObjCAutoRefCount || LangOpts.ObjCWeak)) {
       switch (InitOpts.ObjCXXARCStandardLibrary) {
       case ARCXX_nolib:
-        case ARCXX_libcxx:
+      case ARCXX_libcxx:
         break;
 
       case ARCXX_libstdcxx:
@@ -924,7 +979,8 @@ void clang::InitializePreprocessor(Preprocessor &PP,
 
   // Process -include-pch/-include-pth directives.
   if (!InitOpts.ImplicitPCHInclude.empty())
-    AddImplicitIncludePCH(Builder, PP, InitOpts.ImplicitPCHInclude);
+    AddImplicitIncludePCH(Builder, PP, PCHContainerRdr,
+                          InitOpts.ImplicitPCHInclude);
   if (!InitOpts.ImplicitPTHInclude.empty())
     AddImplicitIncludePTH(Builder, PP, InitOpts.ImplicitPTHInclude);
 

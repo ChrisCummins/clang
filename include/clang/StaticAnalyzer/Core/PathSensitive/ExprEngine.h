@@ -102,7 +102,7 @@ public:
              FunctionSummariesTy *FS,
              InliningModes HowToInlineIn);
 
-  ~ExprEngine();
+  ~ExprEngine() override;
 
   /// Returns true if there is still simulation state on the worklist.
   bool ExecuteWorkList(const LocationContext *L, unsigned Steps = 150000) {
@@ -340,6 +340,10 @@ public:
   /// VisitBlockExpr - Transfer function logic for BlockExprs.
   void VisitBlockExpr(const BlockExpr *BE, ExplodedNode *Pred, 
                       ExplodedNodeSet &Dst);
+
+  /// VisitLambdaExpr - Transfer function logic for LambdaExprs.
+  void VisitLambdaExpr(const LambdaExpr *LE, ExplodedNode *Pred, 
+                       ExplodedNodeSet &Dst);
 
   /// VisitBinaryOperator - Transfer function logic for binary operators.
   void VisitBinaryOperator(const BinaryOperator* B, ExplodedNode *Pred, 
