@@ -5797,7 +5797,8 @@ def warn_non_virtual_dtor : Warning<
   "%0 has virtual functions but non-virtual destructor">,
   InGroup<NonVirtualDtor>, DefaultIgnore;
 def warn_delete_non_virtual_dtor : Warning<
-  "delete called on %0 that has virtual functions but non-virtual destructor">,
+  "delete called on non-final %0 that has virtual functions "
+  "but non-virtual destructor">,
   InGroup<DeleteNonVirtualDtor>, DefaultIgnore;
 def warn_delete_abstract_non_virtual_dtor : Warning<
   "delete called on %0 that is abstract but has non-virtual destructor">,
@@ -7910,6 +7911,8 @@ def note_omp_previous_named_if_clause : Note<
   "previous clause with directive name modifier specified here">;
 def err_omp_ordered_directive_with_param : Error<
   "'ordered' directive %select{without any clauses|with 'threads' clause}0 cannot be closely nested inside ordered region with specified parameter">;
+def err_omp_ordered_directive_without_param : Error<
+  "'ordered' directive with 'depend' clause cannot be closely nested inside ordered region without specified parameter">;
 def note_omp_ordered_param : Note<
   "'ordered' clause with specified parameter">;
 def err_omp_expected_base_var_name : Error<
@@ -7946,6 +7949,8 @@ def err_omp_firstprivate_and_lastprivate_in_distribute : Error<
   "lastprivate variable cannot be firstprivate in '#pragma omp distribute'">;
 def err_omp_firstprivate_distribute_in_teams_reduction : Error<
   "reduction variable in '#pragma omp teams' cannot be firstprivate in '#pragma omp distribute'">;
+def err_omp_depend_clause_thread_simd : Error<
+  "'depend' clauses cannot be mixed with '%0' clause">;
 } // end of OpenMP category
 
 let CategoryName = "Related Result Type Issue" in {

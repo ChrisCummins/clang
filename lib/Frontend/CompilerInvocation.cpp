@@ -405,6 +405,13 @@ static bool ParseCodeGenArgs(CodeGenOptions &Opts, ArgList &Args, InputKind IK,
             .Case("limited", CodeGenOptions::LimitedDebugInfo)
             .Case("standalone", CodeGenOptions::FullDebugInfo));
   }
+  if (Arg *A = Args.getLastArg(OPT_debugger_tuning_EQ)) {
+    Opts.setDebuggerTuning(
+        llvm::StringSwitch<CodeGenOptions::DebuggerKind>(A->getValue())
+            .Case("gdb", CodeGenOptions::DebuggerKindGDB)
+            .Case("lldb", CodeGenOptions::DebuggerKindLLDB)
+            .Case("sce", CodeGenOptions::DebuggerKindSCE));
+  }
   Opts.DwarfVersion = getLastArgIntValue(Args, OPT_dwarf_version_EQ, 0, Diags);
   Opts.DebugColumnInfo = Args.hasArg(OPT_dwarf_column_info);
   Opts.EmitCodeView = Args.hasArg(OPT_gcodeview);
@@ -586,6 +593,7 @@ static bool ParseCodeGenArgs(CodeGenOptions &Opts, ArgList &Args, InputKind IK,
       getLastArgIntValue(Args, OPT_fsanitize_memory_track_origins_EQ, 0, Diags);
   Opts.SanitizeMemoryUseAfterDtor =
       Args.hasArg(OPT_fsanitize_memory_use_after_dtor);
+  Opts.SanitizeCfiCrossDso = Args.hasArg(OPT_fsanitize_cfi_cross_dso);
   Opts.SSPBufferSize =
       getLastArgIntValue(Args, OPT_stack_protector_buffer_size, 8, Diags);
   Opts.StackRealignment = Args.hasArg(OPT_mstackrealign);
