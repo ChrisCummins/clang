@@ -52,6 +52,12 @@ class CLRemainingArgs<string name> : Option<["/", "-"], name,
 // (We don't put any of these in cl_compile_Group as the options they alias are
 // already in the right group.)
 
+def _SLASH_Brepro : CLFlag<"Brepro">,
+  HelpText<"Emit an object file which can be reproduced over time">,
+  Alias<mincremental_linker_compatible>;
+def _SLASH_Brepro_ : CLFlag<"Brepro-">,
+  HelpText<"Emit an object file which cannot be reproduced over time">,
+  Alias<mno_incremental_linker_compatible>;
 def _SLASH_C : CLFlag<"C">,
   HelpText<"Don't discard comments when preprocessing">, Alias<C>;
 def _SLASH_c : CLFlag<"c">, HelpText<"Compile only">, Alias<c>;
@@ -199,6 +205,10 @@ def _SLASH_Fi : CLCompileJoined<"Fi">,
 def _SLASH_Fo : CLCompileJoined<"Fo">,
   HelpText<"Set output object file, or directory (ends in / or \\) (with /c)">,
   MetaVarName<"<file or directory>">;
+def _SLASH_GX : CLFlag<"GX">,
+  HelpText<"Enable exception handling">;
+def _SLASH_GX_ : CLFlag<"GX-">,
+  HelpText<"Enable exception handling">;
 def _SLASH_LD : CLFlag<"LD">, HelpText<"Create DLL">;
 def _SLASH_LDd : CLFlag<"LDd">, HelpText<"Create debug DLL">;
 def _SLASH_link : CLRemainingArgs<"link">,
@@ -302,7 +312,6 @@ def _SLASH_Gr : CLFlag<"Gr">;
 def _SLASH_GS : CLFlag<"GS">;
 def _SLASH_GT : CLFlag<"GT">;
 def _SLASH_Guard : CLJoined<"guard:">;
-def _SLASH_GX : CLFlag<"GX">;
 def _SLASH_Gv : CLFlag<"Gv">;
 def _SLASH_Gz : CLFlag<"Gz">;
 def _SLASH_GZ : CLFlag<"GZ">;

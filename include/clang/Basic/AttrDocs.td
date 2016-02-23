@@ -685,14 +685,20 @@ are:
   Apple's watchOS operating system.  The minimum deployment target is specified by
   the ``-mwatchos-version-min=*version*`` command-line argument.
 
-A declaration can be used even when deploying back to a platform version prior
-to when the declaration was introduced.  When this happens, the declaration is
-`weakly linked
+A declaration can typically be used even when deploying back to a platform
+version prior to when the declaration was introduced.  When this happens, the
+declaration is `weakly linked
 <https://developer.apple.com/library/mac/#documentation/MacOSX/Conceptual/BPFrameworks/Concepts/WeakLinking.html>`_,
 as if the ``weak_import`` attribute were added to the declaration.  A
 weakly-linked declaration may or may not be present a run-time, and a program
 can determine whether the declaration is present by checking whether the
 address of that declaration is non-NULL.
+
+The flag ``strict`` disallows using API when deploying back to a
+platform version prior to when the declaration was introduced.  An
+attempt to use such API before its introduction causes a hard error.
+Weakly-linking is almost always a better API choice, since it allows
+users to query availability at runtime.
 
 If there are multiple declarations of the same entity, the availability
 attributes must either match on a per-platform basis or later
@@ -1562,6 +1568,19 @@ for further details including limitations of the unroll hints.
   }];
 }
 
+def OpenCLUnrollHintDocs : Documentation {
+  let Category = DocCatStmt;
+  let Heading = "__attribute__((opencl_unroll_hint))";
+  let Content = [{
+The opencl_unroll_hint attribute qualifier can be used to specify that a loop
+(for, while and do loops) can be unrolled. This attribute qualifier can be
+used to specify full unrolling or partial unrolling by a specified amount.
+This is a compiler hint and the compiler may ignore this directive. See
+`OpenCL v2.0 <https://www.khronos.org/registry/cl/specs/opencl-2.0.pdf>`_
+s6.11.5 for details.
+  }];
+}
+
 def DocOpenCLAddressSpaces : DocumentationCategory<"OpenCL Address Spaces"> {
   let Content = [{
 The address space qualifier may be used to specify the region of memory that is
@@ -1765,7 +1784,7 @@ The ``not_tail_called`` attribute prevents tail-call optimization on statically 
 
 For example, it prevents tail-call optimization in the following case:
 
-  .. code-block: c
+  .. code-block:: c
 
     int __attribute__((not_tail_called)) foo1(int);
 
@@ -1775,7 +1794,7 @@ For example, it prevents tail-call optimization in the following case:
 
 However, it doesn't prevent tail-call optimization in this case:
 
-  .. code-block: c
+  .. code-block:: c
 
     int __attribute__((not_tail_called)) foo1(int);
 
@@ -1789,7 +1808,7 @@ However, it doesn't prevent tail-call optimization in this case:
 
 Marking virtual functions as ``not_tail_called`` is an error:
 
-  .. code-block: c++
+  .. code-block:: c++
 
     class Base {
     public:
@@ -1839,7 +1858,7 @@ For example:
 
 Marking virtual functions as ``disable_tail_calls`` is legal.
 
-  .. code-block: c++
+  .. code-block:: c++
 
     int callee(int);
 
@@ -1857,5 +1876,58 @@ Marking virtual functions as ``disable_tail_calls`` is legal.
       }
     };
 
+  }];
+}
+
+def AnyX86InterruptDocs : Documentation {
+  let Category = DocCatFunction;
+  let Content = [{
+Clang supports the GNU style ``__attribute__((interrupt))`` attribute on
+x86/x86-64 targets.The compiler generates function entry and exit sequences
+suitable for use in an interrupt handler when this attribute is present.
+The 'IRET' instruction, instead of the 'RET' instruction, is used to return
+from interrupt or exception handlers.  All registers, except for the EFLAGS
+register which is restored by the 'IRET' instruction, are preserved by the
+compiler.
+
+Any interruptible-without-stack-switch code must be compiled with
+-mno-red-zone since interrupt handlers can and will, because of the
+hardware design, touch the red zone.
+
+1. interrupt handler must be declared with a mandatory pointer argument:
+
+  .. code-block:: c
+
+    struct interrupt_frame
+    {
+      uword_t ip;
+      uword_t cs;
+      uword_t flags;
+      uword_t sp;
+      uword_t ss;
+    };
+
+    __attribute__ ((interrupt))
+    void f (struct interrupt_frame *frame) {
+      ...
+    }
+
+2. exception handler:
+
+  The exception handler is very similar to the interrupt handler with
+  a different mandatory function signature:
+
+  .. code-block:: c
+
+    __attribute__ ((interrupt))
+    void f (struct interrupt_frame *frame, uword_t error_code) {
+      ...
+    }
+
+  and compiler pops 'ERROR_CODE' off stack before the 'IRET' instruction.
+
+  The exception handler should only be used for exceptions which push an
+  error code and all other exceptions must use the interrupt handler.
+  The system will crash if the wrong handler is used.
   }];
 }

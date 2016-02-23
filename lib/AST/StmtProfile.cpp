@@ -268,7 +268,14 @@ public:
 #define OPENMP_CLAUSE(Name, Class)                                             \
   void Visit##Class(const Class *C);
 #include "clang/Basic/OpenMPKinds.def"
+  void VistOMPClauseWithPreInit(const OMPClauseWithPreInit *C);
 };
+
+void OMPClauseProfiler::VistOMPClauseWithPreInit(
+    const OMPClauseWithPreInit *C) {
+  if (auto *S = C->getPreInitStmt())
+    Profiler->VisitStmt(S);
+}
 
 void OMPClauseProfiler::VisitOMPIfClause(const OMPIfClause *C) {
   if (C->getCondition())
@@ -305,12 +312,9 @@ void OMPClauseProfiler::VisitOMPDefaultClause(const OMPDefaultClause *C) { }
 void OMPClauseProfiler::VisitOMPProcBindClause(const OMPProcBindClause *C) { }
 
 void OMPClauseProfiler::VisitOMPScheduleClause(const OMPScheduleClause *C) {
-  if (C->getChunkSize()) {
-    Profiler->VisitStmt(C->getChunkSize());
-    if (C->getHelperChunkSize()) {
-      Profiler->VisitStmt(C->getChunkSize());
-    }
-  }
+  VistOMPClauseWithPreInit(C);
+  if (auto *S = C->getChunkSize())
+    Profiler->VisitStmt(S);
 }
 
 void OMPClauseProfiler::VisitOMPOrderedClause(const OMPOrderedClause *C) {
@@ -356,6 +360,7 @@ void OMPClauseProfiler::VisitOMPPrivateClause(const OMPPrivateClause *C) {
 void
 OMPClauseProfiler::VisitOMPFirstprivateClause(const OMPFirstprivateClause *C) {
   VisitOMPClauseList(C);
+  VistOMPClauseWithPreInit(C);
   for (auto *E : C->private_copies()) {
     Profiler->VisitStmt(E);
   }
@@ -584,6 +589,26 @@ void StmtProfiler::VisitOMPTargetDataDirective(const OMPTargetDataDirective *S) 
   VisitOMPExecutableDirective(S);
 }
 
+void StmtProfiler::VisitOMPTargetEnterDataDirective(
+    const OMPTargetEnterDataDirective *S) {
+  VisitOMPExecutableDirective(S);
+}
+
+void StmtProfiler::VisitOMPTargetExitDataDirective(
+    const OMPTargetExitDataDirective *S) {
+  VisitOMPExecutableDirective(S);
+}
+
+void StmtProfiler::VisitOMPTargetParallelDirective(
+    const OMPTargetParallelDirective *S) {
+  VisitOMPExecutableDirective(S);
+}
+
+void StmtProfiler::VisitOMPTargetParallelForDirective(
+    const OMPTargetParallelForDirective *S) {
+  VisitOMPExecutableDirective(S);
+}
+
 void StmtProfiler::VisitOMPTeamsDirective(const OMPTeamsDirective *S) {
   VisitOMPExecutableDirective(S);
 }
@@ -610,6 +635,15 @@ void StmtProfiler::VisitOMPDistributeDirective(
     const OMPDistributeDirective *S) {
   VisitOMPLoopDirective(S);
 }
+
+void OMPClauseProfiler::VisitOMPDistScheduleClause(
+    const OMPDistScheduleClause *C) {
+  VistOMPClauseWithPreInit(C);
+  if (auto *S = C->getChunkSize())
+    Profiler->VisitStmt(S);
+}
+
+void OMPClauseProfiler::VisitOMPDefaultmapClause(const OMPDefaultmapClause *) {}
 
 void StmtProfiler::VisitExpr(const Expr *S) {
   VisitStmt(S);
@@ -675,22 +709,22 @@ void StmtProfiler::VisitOffsetOfExpr(const OffsetOfExpr *S) {
   VisitType(S->getTypeSourceInfo()->getType());
   unsigned n = S->getNumComponents();
   for (unsigned i = 0; i < n; ++i) {
-    const OffsetOfExpr::OffsetOfNode& ON = S->getComponent(i);
+    const OffsetOfNode &ON = S->getComponent(i);
     ID.AddInteger(ON.getKind());
     switch (ON.getKind()) {
-    case OffsetOfExpr::OffsetOfNode::Array:
+    case OffsetOfNode::Array:
       // Expressions handled below.
       break;
 
-    case OffsetOfExpr::OffsetOfNode::Field:
+    case OffsetOfNode::Field:
       VisitDecl(ON.getField());
       break;
 
-    case OffsetOfExpr::OffsetOfNode::Identifier:
+    case OffsetOfNode::Identifier:
       ID.AddPointer(ON.getFieldName());
       break;
-        
-    case OffsetOfExpr::OffsetOfNode::Base:
+
+    case OffsetOfNode::Base:
       // These nodes are implicit, and therefore don't need profiling.
       break;
     }
@@ -1275,8 +1309,7 @@ void StmtProfiler::VisitOverloadExpr(const OverloadExpr *S) {
   VisitName(S->getName());
   ID.AddBoolean(S->hasExplicitTemplateArgs());
   if (S->hasExplicitTemplateArgs())
-    VisitTemplateArguments(S->getExplicitTemplateArgs().getTemplateArgs(),
-                           S->getExplicitTemplateArgs().NumTemplateArgs);
+    VisitTemplateArguments(S->getTemplateArgs(), S->getNumTemplateArgs());
 }
 
 void

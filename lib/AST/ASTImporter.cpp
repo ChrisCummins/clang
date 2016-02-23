@@ -130,6 +130,7 @@ namespace clang {
     bool IsStructuralMatch(ClassTemplateDecl *From, ClassTemplateDecl *To);
     bool IsStructuralMatch(VarTemplateDecl *From, VarTemplateDecl *To);
     Decl *VisitDecl(Decl *D);
+    Decl *VisitAccessSpecDecl(AccessSpecDecl *D);
     Decl *VisitTranslationUnitDecl(TranslationUnitDecl *D);
     Decl *VisitNamespaceDecl(NamespaceDecl *D);
     Decl *VisitTypedefNameDecl(TypedefNameDecl *D, bool IsAlias);
@@ -874,6 +875,14 @@ static bool IsStructurallyEquivalent(StructuralEquivalenceContext &Context,
     if (!IsStructurallyEquivalent(Context,
                                   cast<AtomicType>(T1)->getValueType(),
                                   cast<AtomicType>(T2)->getValueType()))
+      return false;
+    break;
+  }
+
+  case Type::Pipe: {
+    if (!IsStructurallyEquivalent(Context,
+                                  cast<PipeType>(T1)->getElementType(),
+                                  cast<PipeType>(T2)->getElementType()))
       return false;
     break;
   }
@@ -2015,6 +2024,7 @@ bool ASTNodeImporter::ImportDefinition(RecordDecl *From, RecordDecl *To,
     ToData.HasInClassInitializer = FromData.HasInClassInitializer;
     ToData.HasUninitializedReferenceMember
       = FromData.HasUninitializedReferenceMember;
+    ToData.HasUninitializedFields = FromData.HasUninitializedFields;
     ToData.NeedOverloadResolutionForMoveConstructor
       = FromData.NeedOverloadResolutionForMoveConstructor;
     ToData.NeedOverloadResolutionForMoveAssignment
@@ -2144,7 +2154,7 @@ TemplateParameterList *ASTNodeImporter::ImportTemplateParameterList(
   return TemplateParameterList::Create(Importer.getToContext(),
                                        Importer.Import(Params->getTemplateLoc()),
                                        Importer.Import(Params->getLAngleLoc()),
-                                       ToParams.data(), ToParams.size(),
+                                       ToParams,
                                        Importer.Import(Params->getRAngleLoc()));
 }
 
@@ -2306,6 +2316,31 @@ Decl *ASTNodeImporter::VisitTranslationUnitDecl(TranslationUnitDecl *D) {
   Importer.Imported(D, ToD);
     
   return ToD;
+}
+
+Decl *ASTNodeImporter::VisitAccessSpecDecl(AccessSpecDecl *D) {
+
+  SourceLocation Loc = Importer.Import(D->getLocation());
+  SourceLocation ColonLoc = Importer.Import(D->getColonLoc());
+
+  // Import the context of this declaration.
+  DeclContext *DC = Importer.ImportContext(D->getDeclContext());
+  if (!DC)
+    return nullptr;
+
+  AccessSpecDecl *accessSpecDecl
+    = AccessSpecDecl::Create(Importer.getToContext(), D->getAccess(),
+                             DC, Loc, ColonLoc);
+
+  if (!accessSpecDecl)
+    return nullptr;
+
+  // Lexical DeclContext and Semantic DeclContext
+  // is always the same for the accessSpec.
+  accessSpecDecl->setLexicalDeclContext(DC);
+  DC->addDeclInternal(accessSpecDecl);
+
+  return accessSpecDecl;
 }
 
 Decl *ASTNodeImporter::VisitNamespaceDecl(NamespaceDecl *D) {
@@ -4053,7 +4088,8 @@ Decl *ASTNodeImporter::VisitObjCPropertyImplDecl(ObjCPropertyImplDecl *D) {
   }
 
   ObjCPropertyImplDecl *ToImpl
-    = InImpl->FindPropertyImplDecl(Property->getIdentifier());
+    = InImpl->FindPropertyImplDecl(Property->getIdentifier(),
+                                   Property->getQueryKind());
   if (!ToImpl) {    
     ToImpl = ObjCPropertyImplDecl::Create(Importer.getToContext(), DC,
                                           Importer.Import(D->getLocStart()),
