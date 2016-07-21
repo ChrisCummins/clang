@@ -14,6 +14,12 @@
 using namespace clang;
 using namespace index;
 
+#define TRY_TO(CALL_EXPR)                                                      \
+  do {                                                                         \
+    if (!CALL_EXPR)                                                            \
+      return false;                                                            \
+  } while (0)
+
 namespace {
 
 class IndexingDeclVisitor : public ConstDeclVisitor<IndexingDeclVisitor, bool> {
@@ -61,7 +67,7 @@ public:
         }
       } else if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(D)) {
         if (FD->isThisDeclarationADefinition()) {
-          for (auto PI : FD->params()) {
+          for (auto PI : FD->parameters()) {
             IndexCtx.handleDecl(PI);
           }
         }
@@ -73,7 +79,7 @@ public:
     if (!IndexCtx.handleDecl(D, (unsigned)SymbolRole::Dynamic))
       return false;
     IndexCtx.indexTypeSourceInfo(D->getReturnTypeSourceInfo(), D);
-    for (const auto *I : D->params())
+    for (const auto *I : D->parameters())
       handleDeclarator(I, D);
 
     if (D->isThisDeclarationADefinition()) {
@@ -196,26 +202,45 @@ public:
     return true;
   }
 
+  bool handleReferencedProtocols(const ObjCProtocolList &ProtList,
+                                 const ObjCContainerDecl *ContD) {
+    ObjCInterfaceDecl::protocol_loc_iterator LI = ProtList.loc_begin();
+    for (ObjCInterfaceDecl::protocol_iterator
+         I = ProtList.begin(), E = ProtList.end(); I != E; ++I, ++LI) {
+      SourceLocation Loc = *LI;
+      ObjCProtocolDecl *PD = *I;
+      TRY_TO(IndexCtx.handleReference(PD, Loc, ContD, ContD,
+          SymbolRoleSet(),
+          SymbolRelation{(unsigned)SymbolRole::RelationBaseOf, ContD}));
+    }
+    return true;
+  }
+
   bool VisitObjCInterfaceDecl(const ObjCInterfaceDecl *D) {
     if (D->isThisDeclarationADefinition()) {
-      if (!IndexCtx.handleDecl(D))
-        return false;
-      IndexCtx.indexDeclContext(D);
+      TRY_TO(IndexCtx.handleDecl(D));
+      if (auto *SuperD = D->getSuperClass()) {
+        TRY_TO(IndexCtx.handleReference(SuperD, D->getSuperClassLoc(), D, D,
+            SymbolRoleSet(),
+            SymbolRelation{(unsigned)SymbolRole::RelationBaseOf, D}));
+      }
+      TRY_TO(handleReferencedProtocols(D->getReferencedProtocols(), D));
+      TRY_TO(IndexCtx.indexDeclContext(D));
     } else {
-      return IndexCtx.handleReference(D, D->getLocation(), nullptr, nullptr,
-                                      SymbolRoleSet());
+      return IndexCtx.handleReference(D, D->getLocation(), nullptr,
+                                      D->getDeclContext(), SymbolRoleSet());
     }
     return true;
   }
 
   bool VisitObjCProtocolDecl(const ObjCProtocolDecl *D) {
     if (D->isThisDeclarationADefinition()) {
-      if (!IndexCtx.handleDecl(D))
-        return false;
-      IndexCtx.indexDeclContext(D);
+      TRY_TO(IndexCtx.handleDecl(D));
+      TRY_TO(handleReferencedProtocols(D->getReferencedProtocols(), D));
+      TRY_TO(IndexCtx.indexDeclContext(D));
     } else {
-      return IndexCtx.handleReference(D, D->getLocation(), nullptr, nullptr,
-                                      SymbolRoleSet());
+      return IndexCtx.handleReference(D, D->getLocation(), nullptr,
+                                      D->getDeclContext(), SymbolRoleSet());
     }
     return true;
   }

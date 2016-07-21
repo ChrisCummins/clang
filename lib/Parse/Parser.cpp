@@ -20,7 +20,6 @@
 #include "clang/Sema/DeclSpec.h"
 #include "clang/Sema/ParsedTemplate.h"
 #include "clang/Sema/Scope.h"
-#include "llvm/Support/raw_ostream.h"
 using namespace clang;
 
 
@@ -492,6 +491,7 @@ void Parser::Initialize() {
   Ident_obsoleted = nullptr;
   Ident_unavailable = nullptr;
   Ident_strict = nullptr;
+  Ident_replacement = nullptr;
 
   Ident__except = nullptr;
 
@@ -658,8 +658,10 @@ Parser::ParseExternalDeclaration(ParsedAttributesWithRange &attrs,
   case tok::annot_pragma_opencl_extension:
     HandlePragmaOpenCLExtension();
     return nullptr;
-  case tok::annot_pragma_openmp:
-    return ParseOpenMPDeclarativeDirective();
+  case tok::annot_pragma_openmp: {
+    AccessSpecifier AS = AS_none;
+    return ParseOpenMPDeclarativeDirectiveWithExtDecl(AS, attrs);
+  }
   case tok::annot_pragma_ms_pointers_to_members:
     HandlePragmaMSPointersToMembers();
     return nullptr;
@@ -1041,6 +1043,12 @@ Decl *Parser::ParseFunctionDefinition(ParsingDeclarator &D,
     D.complete(DP);
     D.getMutableDeclSpec().abort();
 
+    if (SkipFunctionBodies && (!DP || Actions.canSkipFunctionBody(DP)) &&
+        trySkippingFunctionBody()) {
+      BodyScope.Exit();
+      return Actions.ActOnSkippedFunctionBody(DP);
+    }
+
     CachedTokens Toks;
     LexTemplateFunctionForLateParsing(Toks);
 
@@ -1131,6 +1139,13 @@ Decl *Parser::ParseFunctionDefinition(ParsingDeclarator &D,
     Stmt *GeneratedBody = Res ? Res->getBody() : nullptr;
     Actions.ActOnFinishFunctionBody(Res, GeneratedBody, false);
     return Res;
+  }
+
+  if (SkipFunctionBodies && (!Res || Actions.canSkipFunctionBody(Res)) &&
+      trySkippingFunctionBody()) {
+    BodyScope.Exit();
+    Actions.ActOnSkippedFunctionBody(Res);
+    return Actions.ActOnFinishFunctionBody(Res, nullptr, false);
   }
 
   if (Tok.is(tok::kw_try))

@@ -46,6 +46,7 @@ public:
   enum InliningMethod {
     NoInlining,         // Perform no inlining whatsoever.
     NormalInlining,     // Use the standard function inlining pass.
+    OnlyHintInlining,   // Inline only (implicitly) hinted functions.
     OnlyAlwaysInlining  // Only run the always inlining pass.
   };
 
@@ -80,9 +81,17 @@ public:
   };
 
   enum ProfileInstrKind {
-    ProfileNoInstr,    // No instrumentation.
-    ProfileClangInstr  // Clang instrumentation to generate execution counts
+    ProfileNone,       // Profile instrumentation is turned off.
+    ProfileClangInstr, // Clang instrumentation to generate execution counts
                        // to use with PGO.
+    ProfileIRInstr,    // IR level PGO instrumentation in LLVM.
+  };
+
+  enum EmbedBitcodeKind {
+    Embed_Off,      // No embedded bitcode.
+    Embed_All,      // Embed both bitcode and commandline in the output.
+    Embed_Bitcode,  // Embed just the bitcode in the output.
+    Embed_Marker    // Embed a marker as a placeholder for bitcode.
   };
 
   /// The code model to use (-mcmodel).
@@ -152,14 +161,11 @@ public:
   std::string SampleProfileFile;
 
   /// Name of the profile file to use as input for -fprofile-instr-use
-  std::string InstrProfileInput;
+  std::string ProfileInstrumentUsePath;
 
   /// Name of the function summary index file to use for ThinLTO function
   /// importing.
   std::string ThinLTOIndexFile;
-
-  /// The EABI version to use
-  std::string EABIVersion;
 
   /// A list of file names passed with -fcuda-include-gpubinary options to
   /// forward to CUDA runtime back-end for incorporating them into host-side
@@ -198,6 +204,9 @@ public:
   /// Set of sanitizer checks that trap rather than diagnose.
   SanitizerSet SanitizeTrap;
 
+  /// List of backend command-line options for -fembed-bitcode.
+  std::vector<uint8_t> CmdArgs;
+
   /// \brief A list of all -fno-builtin-* function names (e.g., memset).
   std::vector<std::string> NoBuiltinFuncs;
 
@@ -223,6 +232,22 @@ public:
   bool hasProfileClangInstr() const {
     return getProfileInstr() == ProfileClangInstr;
   }
+
+  /// \brief Check if IR level profile instrumentation is on.
+  bool hasProfileIRInstr() const {
+    return getProfileInstr() == ProfileIRInstr;
+  }
+
+  /// \brief Check if Clang profile use is on.
+  bool hasProfileClangUse() const {
+    return getProfileUse() == ProfileClangInstr;
+  }
+
+  /// \brief Check if IR level profile use is on.
+  bool hasProfileIRUse() const {
+    return getProfileUse() == ProfileIRInstr;
+  }
+
 };
 
 }  // end namespace clang

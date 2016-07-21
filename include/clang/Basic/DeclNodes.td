@@ -11,6 +11,8 @@ class DDecl<Decl base, bit abstract = 0> : Decl<abstract> {
 class DeclContext { }
 
 def TranslationUnit : Decl, DeclContext;
+def PragmaComment : Decl;
+def PragmaDetectMismatch : Decl;
 def ExternCContext : Decl, DeclContext;
 def Named : Decl<1>;
   def Namespace : DDecl<Named>, DeclContext;
@@ -35,6 +37,7 @@ def Named : Decl<1>;
     def EnumConstant : DDecl<Value>;
     def UnresolvedUsingValue : DDecl<Value>;
     def IndirectField : DDecl<Value>;
+    def OMPDeclareReduction : DDecl<Value>, DeclContext;
     def Declarator : DDecl<Value, 1>;
       def Field : DDecl<Declarator>;
         def ObjCIvar : DDecl<Field>;
@@ -63,6 +66,7 @@ def Named : Decl<1>;
     def BuiltinTemplate : DDecl<Template>;
   def Using : DDecl<Named>;
   def UsingShadow : DDecl<Named>;
+    def ConstructorUsingShadow : DDecl<UsingShadow>;
   def ObjCMethod : DDecl<Named>, DeclContext;
   def ObjCContainer : DDecl<Named, 1>, DeclContext;
     def ObjCCategory : DDecl<ObjCContainer>;

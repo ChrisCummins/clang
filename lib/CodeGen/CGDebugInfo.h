@@ -64,18 +64,9 @@ class CGDebugInfo {
   llvm::DIType *ClassTy = nullptr;
   llvm::DICompositeType *ObjTy = nullptr;
   llvm::DIType *SelTy = nullptr;
-  llvm::DIType *OCLImage1dDITy = nullptr;
-  llvm::DIType *OCLImage1dArrayDITy = nullptr;
-  llvm::DIType *OCLImage1dBufferDITy = nullptr;
-  llvm::DIType *OCLImage2dDITy = nullptr;
-  llvm::DIType *OCLImage2dArrayDITy = nullptr;
-  llvm::DIType *OCLImage2dDepthDITy = nullptr;
-  llvm::DIType *OCLImage2dArrayDepthDITy = nullptr;
-  llvm::DIType *OCLImage2dMSAADITy = nullptr;
-  llvm::DIType *OCLImage2dArrayMSAADITy = nullptr;
-  llvm::DIType *OCLImage2dMSAADepthDITy = nullptr;
-  llvm::DIType *OCLImage2dArrayMSAADepthDITy = nullptr;
-  llvm::DIType *OCLImage3dDITy = nullptr;
+#define IMAGE_TYPE(ImgType, Id, SingletonId, Access, Suffix) \
+  llvm::DIType *SingletonId = nullptr;
+#include "clang/Basic/OpenCLImageTypes.def"
   llvm::DIType *OCLEventDITy = nullptr;
   llvm::DIType *OCLClkEventDITy = nullptr;
   llvm::DIType *OCLQueueDITy = nullptr;
@@ -116,11 +107,6 @@ class CGDebugInfo {
 
   /// Keep track of our current nested lexical block.
   std::vector<llvm::TypedTrackingMDRef<llvm::DIScope>> LexicalBlockStack;
-
-  /// Map of AST declaration to its lexical block scope.
-  llvm::DenseMap<const Decl *, llvm::TypedTrackingMDRef<llvm::DIScope>>
-      LexicalBlockMap;
-
   llvm::DenseMap<const Decl *, llvm::TrackingMDRef> RegionMap;
   /// Keep track of LexicalBlockStack counter at the beginning of a
   /// function. This is used to pop unbalanced regions at the end of a
@@ -246,10 +232,15 @@ class CGDebugInfo {
                            llvm::DIFile *F);
 
   llvm::DIType *createFieldType(StringRef name, QualType type,
-                                uint64_t sizeInBitsOverride, SourceLocation loc,
-                                AccessSpecifier AS, uint64_t offsetInBits,
-                                llvm::DIFile *tunit, llvm::DIScope *scope,
+                                SourceLocation loc, AccessSpecifier AS,
+                                uint64_t offsetInBits, llvm::DIFile *tunit,
+                                llvm::DIScope *scope,
                                 const RecordDecl *RD = nullptr);
+
+  /// Create new bit field member.
+  llvm::DIType *createBitFieldType(const FieldDecl *BitFieldDecl,
+                                   llvm::DIScope *RecordTy,
+                                   const RecordDecl *RD);
 
   /// Helpers for collecting fields of a record.
   /// @{
@@ -382,12 +373,6 @@ public:
 
   /// Emit an Objective-C interface type standalone debug info.
   llvm::DIType *getOrCreateInterfaceType(QualType Ty, SourceLocation Loc);
-
-  /// Map AST declaration to its lexical block scope if available.
-  void recordDeclarationLexicalScope(const Decl &D);
-
-  /// Get lexical scope of AST declaration.
-  llvm::DIScope *getDeclarationLexicalScope(const Decl &D, QualType Ty);
 
   /// Emit standalone debug info for a type.
   llvm::DIType *getOrCreateStandaloneType(QualType Ty, SourceLocation Loc);

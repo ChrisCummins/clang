@@ -44,7 +44,6 @@
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/IntrusiveRefCntPtr.h"
 #include "llvm/ADT/PointerIntPair.h"
-#include "llvm/ADT/PointerUnion.h"
 #include "llvm/Support/AlignOf.h"
 #include "llvm/Support/Allocator.h"
 #include "llvm/Support/DataTypes.h"
@@ -795,6 +794,15 @@ public:
                       SourceLocation IncludeLoc = SourceLocation()) {
     return createFileID(createMemBufferContentCache(std::move(Buffer)),
                         IncludeLoc, FileCharacter, LoadedID, LoadedOffset);
+  }
+
+  /// \brief Get the FileID for \p SourceFile if it exists. Otherwise, create a
+  /// new FileID for the \p SourceFile.
+  FileID getOrCreateFileID(const FileEntry *SourceFile,
+                           SrcMgr::CharacteristicKind FileCharacter) {
+    FileID ID = translateFile(SourceFile);
+    return ID.isValid() ? ID : createFileID(SourceFile, SourceLocation(),
+                                            FileCharacter);
   }
 
   /// \brief Return a new SourceLocation that encodes the

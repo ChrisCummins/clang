@@ -29,15 +29,14 @@ class Value;
 }
 
 namespace clang {
-class ABIInfo;
 class Decl;
 
 namespace CodeGen {
+class ABIInfo;
 class CallArgList;
 class CodeGenModule;
 class CodeGenFunction;
 class CGFunctionInfo;
-}
 
 /// TargetCodeGenInfo - This class organizes various target-specific
 /// codegeneration issues, like target-specific attributes, builtins and so
@@ -218,7 +217,15 @@ public:
   virtual void getDetectMismatchOption(llvm::StringRef Name,
                                        llvm::StringRef Value,
                                        llvm::SmallString<32> &Opt) const {}
+
+  /// Get LLVM calling convention for OpenCL kernel.
+  virtual unsigned getOpenCLKernelCallingConv() const;
+
+  /// Get LLVM Image Address Space for OpenCL kernel.
+  virtual unsigned getOpenCLImageAddrSpace(CodeGen::CodeGenModule &CGM) const;
 };
+
+} // namespace CodeGen
 } // namespace clang
 
 #endif // LLVM_CLANG_LIB_CODEGEN_TARGETINFO_H

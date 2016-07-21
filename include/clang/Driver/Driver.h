@@ -17,16 +17,14 @@
 #include "clang/Driver/Util.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/ADT/Triple.h"
-#include "llvm/Support/Path.h" // FIXME: Kill when CompilationInfo lands.
 
 #include <list>
 #include <map>
-#include <memory>
-#include <set>
 #include <string>
 
 namespace llvm {
+class Triple;
+
 namespace opt {
   class Arg;
   class ArgList;
@@ -83,6 +81,12 @@ class Driver {
     SaveTempsObj
   } SaveTemps;
 
+  enum BitcodeEmbedMode {
+    EmbedNone,
+    EmbedMarker,
+    EmbedBitcode
+  } BitcodeEmbed;
+
   /// LTO mode selected via -f(no-)?lto(=.*)? options.
   LTOKind LTOMode;
 
@@ -125,9 +129,6 @@ public:
 
   /// If the standard library is used
   bool UseStdLib;
-
-  /// Default target triple.
-  std::string DefaultTargetTriple;
 
   /// Driver title to use with help.
   std::string DriverTitle;
@@ -177,6 +178,9 @@ public:
   unsigned CCGenDiagnostics : 1;
 
 private:
+  /// Default target triple.
+  std::string DefaultTargetTriple;
+
   /// Name to use when invoking gcc/g++.
   std::string CCCGenericGCCName;
 
@@ -190,7 +194,7 @@ public:
 
 private:
   /// Certain options suppress the 'no input files' warning.
-  bool SuppressMissingInputWarning : 1;
+  unsigned SuppressMissingInputWarning : 1;
 
   std::list<std::string> TempFiles;
   std::list<std::string> ResultFiles;
@@ -242,7 +246,7 @@ public:
   void setCheckInputsExist(bool Value) { CheckInputsExist = Value; }
 
   const std::string &getTitle() { return DriverTitle; }
-  void setTitle(std::string Value) { DriverTitle = Value; }
+  void setTitle(std::string Value) { DriverTitle = std::move(Value); }
 
   /// \brief Get the path to the main clang executable.
   const char *getClangProgramPath() const {
@@ -262,9 +266,17 @@ public:
   bool isSaveTempsEnabled() const { return SaveTemps != SaveTempsNone; }
   bool isSaveTempsObj() const { return SaveTemps == SaveTempsObj; }
 
+  bool embedBitcodeEnabled() const { return BitcodeEmbed == EmbedBitcode; }
+  bool embedBitcodeMarkerOnly() const { return BitcodeEmbed == EmbedMarker; }
+
   /// @}
   /// @name Primary Functionality
   /// @{
+
+  /// CreateOffloadingDeviceToolChains - create all the toolchains required to
+  /// support offloading devices given the programming models specified in the
+  /// current compilation. Also, update the host tool chain kind accordingly.
+  void CreateOffloadingDeviceToolChains(Compilation &C, InputList &Inputs);
 
   /// BuildCompilation - Construct a compilation object for a command
   /// line argument vector.
@@ -380,12 +392,13 @@ public:
   /// BuildJobsForAction - Construct the jobs to perform for the action \p A and
   /// return an InputInfo for the result of running \p A.  Will only construct
   /// jobs for a given (Action, ToolChain, BoundArch) tuple once.
-  InputInfo BuildJobsForAction(Compilation &C, const Action *A,
-                               const ToolChain *TC, const char *BoundArch,
-                               bool AtTopLevel, bool MultipleArchs,
-                               const char *LinkingOutput,
-                               std::map<std::pair<const Action *, std::string>,
-                                        InputInfo> &CachedResults) const;
+  InputInfo
+  BuildJobsForAction(Compilation &C, const Action *A, const ToolChain *TC,
+                     const char *BoundArch, bool AtTopLevel, bool MultipleArchs,
+                     const char *LinkingOutput,
+                     std::map<std::pair<const Action *, std::string>, InputInfo>
+                         &CachedResults,
+                     bool BuildForOffloadDevice) const;
 
   /// Returns the default name for linked images (e.g., "a.out").
   const char *getDefaultImageName() const;
@@ -401,18 +414,20 @@ public:
   /// \param BoundArch - The bound architecture. 
   /// \param AtTopLevel - Whether this is a "top-level" action.
   /// \param MultipleArchs - Whether multiple -arch options were supplied.
-  const char *GetNamedOutputPath(Compilation &C,
-                                 const JobAction &JA,
-                                 const char *BaseInput,
-                                 const char *BoundArch,
-                                 bool AtTopLevel,
-                                 bool MultipleArchs) const;
+  /// \param NormalizedTriple - The normalized triple of the relevant target.
+  const char *GetNamedOutputPath(Compilation &C, const JobAction &JA,
+                                 const char *BaseInput, const char *BoundArch,
+                                 bool AtTopLevel, bool MultipleArchs,
+                                 StringRef NormalizedTriple) const;
 
   /// GetTemporaryPath - Return the pathname of a temporary file to use 
   /// as part of compilation; the file will have the given prefix and suffix.
   ///
   /// GCC goes to extra lengths here to be a bit more robust.
   std::string GetTemporaryPath(StringRef Prefix, const char *Suffix) const;
+
+  /// Return the pathname of the pch file in clang-cl mode.
+  std::string GetClPchPath(Compilation &C, StringRef BaseName) const;
 
   /// ShouldUseClangCompiler - Should the clang compiler be used to
   /// handle this action.
@@ -450,7 +465,8 @@ private:
       const char *BoundArch, bool AtTopLevel, bool MultipleArchs,
       const char *LinkingOutput,
       std::map<std::pair<const Action *, std::string>, InputInfo>
-          &CachedResults) const;
+          &CachedResults,
+      bool BuildForOffloadDevice) const;
 
 public:
   /// GetReleaseVersion - Parse (([0-9]+)(.([0-9]+)(.([0-9]+)?))?)? and
@@ -463,6 +479,15 @@ public:
   static bool GetReleaseVersion(const char *Str, unsigned &Major,
                                 unsigned &Minor, unsigned &Micro,
                                 bool &HadExtra);
+
+  /// Parse digits from a string \p Str and fulfill \p Digits with
+  /// the parsed numbers. This method assumes that the max number of
+  /// digits to look for is equal to Digits.size().
+  ///
+  /// \return True if the entire string was parsed and there are
+  /// no extra characters remaining at the end.
+  static bool GetReleaseVersion(const char *Str,
+                                MutableArrayRef<unsigned> Digits);
 };
 
 /// \return True if the last defined optimization level is -Ofast.

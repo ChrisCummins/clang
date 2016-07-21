@@ -107,6 +107,26 @@ public:
 
     return true;
   }
+
+  bool handleModuleOccurence(const ImportDecl *ImportD, SymbolRoleSet Roles,
+                             FileID FID, unsigned Offset) override {
+    ASTContext &Ctx = ImportD->getASTContext();
+    SourceManager &SM = Ctx.getSourceManager();
+
+    unsigned Line = SM.getLineNumber(FID, Offset);
+    unsigned Col = SM.getColumnNumber(FID, Offset);
+    OS << Line << ':' << Col << " | ";
+
+    printSymbolInfo(getSymbolInfo(ImportD), OS);
+    OS << " | ";
+
+    OS << ImportD->getImportedModule()->getFullModuleName() << " | ";
+
+    printSymbolRoles(Roles, OS);
+    OS << " |\n";
+
+    return true;
+  }
 };
 
 } // anonymous namespace
@@ -148,8 +168,10 @@ static bool printSourceSymbols(ArrayRef<const char *> Args) {
 
 static void printSymbolInfo(SymbolInfo SymInfo, raw_ostream &OS) {
   OS << getSymbolKindString(SymInfo.Kind);
-  if (SymInfo.TemplateKind != SymbolCXXTemplateKind::NonTemplate) {
-    OS << '-' << getTemplateKindStr(SymInfo.TemplateKind);
+  if (SymInfo.SubKinds) {
+    OS << '(';
+    printSymbolSubKinds(SymInfo.SubKinds, OS);
+    OS << ')';
   }
   OS << '/' << getSymbolLanguageString(SymInfo.Lang);
 }
@@ -174,8 +196,12 @@ static void printSymbolNameAndUSR(const Decl *D, ASTContext &Ctx,
 //===----------------------------------------------------------------------===//
 
 int indextest_core_main(int argc, const char **argv) {
-  sys::PrintStackTraceOnErrorSignal();
+  sys::PrintStackTraceOnErrorSignal(argv[0]);
   PrettyStackTraceProgram X(argc, argv);
+
+  assert(argv[1] == StringRef("core"));
+  ++argv;
+  --argc;
 
   std::vector<const char *> CompArgs;
   const char **DoubleDash = std::find(argv, argv + argc, StringRef("--"));

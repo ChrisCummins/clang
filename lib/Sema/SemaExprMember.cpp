@@ -142,6 +142,7 @@ static IMAKind ClassifyImplicitMemberAccess(Sema &SemaRef,
     AbstractInstanceResult = IMA_Abstract;
     break;
 
+  case Sema::DiscardedStatement:
   case Sema::ConstantEvaluated:
   case Sema::PotentiallyEvaluated:
   case Sema::PotentiallyEvaluatedIfUsed:
@@ -1100,6 +1101,8 @@ Sema::BuildMemberReferenceExpr(Expr *BaseExpr, QualType BaseExprType,
       // declaration corresponding to the supplied template arguments
       // (while emitting diagnostics as necessary) that will be referenced
       // by this expression.
+      assert((!TemplateArgs || isa<VarTemplateDecl>(MemberDecl)) &&
+             "How did we get template arguments here sans a variable template");
       if (isa<VarTemplateDecl>(MemberDecl)) {
         MemberDecl = getVarTemplateSpecialization(
             *this, cast<VarTemplateDecl>(MemberDecl), TemplateArgs,
@@ -1107,7 +1110,8 @@ Sema::BuildMemberReferenceExpr(Expr *BaseExpr, QualType BaseExprType,
         if (!MemberDecl)
           return ExprError();
       }
-      return BuildDeclarationNameExpr(SS, R.getLookupNameInfo(), MemberDecl);
+      return BuildDeclarationNameExpr(SS, R.getLookupNameInfo(), MemberDecl,
+                                      FoundDecl, TemplateArgs);
     }
     SourceLocation Loc = R.getNameLoc();
     if (SS.getRange().isValid())
@@ -1789,9 +1793,10 @@ BuildFieldReferenceExpr(Sema &S, Expr *BaseExpr, bool IsArrow,
   // Build a reference to a private copy for non-static data members in
   // non-static member functions, privatized by OpenMP constructs.
   if (S.getLangOpts().OpenMP && IsArrow &&
+      !S.CurContext->isDependentContext() &&
       isa<CXXThisExpr>(Base.get()->IgnoreParenImpCasts())) {
     if (auto *PrivateCopy = S.IsOpenMPCapturedDecl(Field))
-      return S.getOpenMPCapturedExpr(PrivateCopy, VK, OK);
+      return S.getOpenMPCapturedExpr(PrivateCopy, VK, OK, OpLoc);
   }
   return ME;
 }

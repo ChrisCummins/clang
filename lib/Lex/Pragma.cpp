@@ -28,8 +28,6 @@
 #include <algorithm>
 using namespace clang;
 
-#include "llvm/Support/raw_ostream.h"
-
 // Out-of-line destructor to provide a home for the class.
 PragmaHandler::~PragmaHandler() {
 }
@@ -1489,6 +1487,13 @@ void Preprocessor::RegisterBuiltinPragmas() {
     AddPragmaHandler(new PragmaIncludeAliasHandler());
     AddPragmaHandler(new PragmaRegionHandler("region"));
     AddPragmaHandler(new PragmaRegionHandler("endregion"));
+  }
+
+  // Pragmas added by plugins
+  for (PragmaHandlerRegistry::iterator it = PragmaHandlerRegistry::begin(),
+                                       ie = PragmaHandlerRegistry::end();
+       it != ie; ++it) {
+    AddPragmaHandler(it->instantiate().release());
   }
 }
 
